@@ -11,7 +11,9 @@ tasksRouter.get("/api/tasks", async (_req, env) => {
 });
 
 tasksRouter.get("/api/tasks/:id", async (req, env) => {
-  const task = await queryOne<Task>(env.DB, "SELECT * FROM tasks WHERE id = ?", [req.params.id]);
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
+  const task = await queryOne<Task>(env.DB, "SELECT * FROM tasks WHERE id = ?", [id]);
   if (!task) return new Response("Not found", { status: 404 });
   return Response.json(task);
 });
@@ -31,9 +33,11 @@ tasksRouter.post("/api/tasks", async (req, env) => {
 });
 
 tasksRouter.patch("/api/tasks/:id/status", async (req, env) => {
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
   const { status } = await req.json<{ status: Task["status"] }>();
   const now = new Date().toISOString();
   await run(env.DB, "UPDATE tasks SET status=?, updated_at=? WHERE id=?",
-    [status, now, req.params.id]);
+    [status, now, id]);
   return Response.json({ ok: true });
 });

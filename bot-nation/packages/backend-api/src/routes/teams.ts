@@ -11,7 +11,9 @@ teamsRouter.get("/api/teams", async (_req, env) => {
 });
 
 teamsRouter.get("/api/teams/:id", async (req, env) => {
-  const team = await queryOne<Team>(env.DB, "SELECT * FROM teams WHERE id = ?", [req.params.id]);
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
+  const team = await queryOne<Team>(env.DB, "SELECT * FROM teams WHERE id = ?", [id]);
   if (!team) return new Response("Not found", { status: 404 });
   return Response.json(team);
 });

@@ -11,7 +11,9 @@ agentsRouter.get("/api/agents", async (_req, env) => {
 });
 
 agentsRouter.get("/api/agents/:id", async (req, env) => {
-  const agent = await queryOne<Agent>(env.DB, "SELECT * FROM agents WHERE id = ?", [req.params.id]);
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
+  const agent = await queryOne<Agent>(env.DB, "SELECT * FROM agents WHERE id = ?", [id]);
   if (!agent) return new Response("Not found", { status: 404 });
   return Response.json(agent);
 });
@@ -43,6 +45,8 @@ agentsRouter.post("/api/agents", async (req, env) => {
 });
 
 agentsRouter.patch("/api/agents/:id", async (req, env) => {
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
   const body = await req.json<Partial<Agent>>();
   const now = new Date().toISOString();
   await run(
@@ -64,7 +68,7 @@ agentsRouter.patch("/api/agents/:id", async (req, env) => {
       body.permissions !== undefined ? JSON.stringify(body.permissions) : null,
       body.description ?? null,
       now,
-      req.params["id"],
+      id,
     ]
   );
   return Response.json({ ok: true });

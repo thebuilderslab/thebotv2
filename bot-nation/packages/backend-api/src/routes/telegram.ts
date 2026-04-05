@@ -1,6 +1,7 @@
 ﻿import { AutoRouter } from "itty-router";
 import type { Env } from "../index";
 import type { ApprovalBrief } from "@bot-nation/core-domain";
+import { applyChangeForApproval } from "../services/change-apply";
 
 export const telegramRouter = AutoRouter();
 
@@ -43,12 +44,26 @@ telegramRouter.post("/telegram", async (req, env: Env) => {
       .bind(decision, now, approvalId)
       .run();
 
+    // Apply the changeSet if this approval is linked to a proposal
+    let applyNote = "";
+    if (decision === "approved") {
+      const result = await applyChangeForApproval(
+        env.DB,
+        approvalId,
+        String(update.callback_query.from.id),
+        null,
+      );
+      applyNote = result.ok && result.appliedFields.length > 0
+        ? ` · applied ${result.appliedFields.length} field(s)`
+        : "";
+    }
+
     await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         callback_query_id: update.callback_query.id,
-        text: `Marked as ${decision}`,
+        text: `Marked as ${decision}${applyNote}`,
       }),
     });
   }
