@@ -1,6 +1,6 @@
 ﻿import { AutoRouter, type IRequest } from "itty-router";
 import type { Env } from "../index";
-import { queryOne, run } from "../db/schema";
+import { query, queryOne, run } from "../db/schema";
 import type { Approval, ApprovalDecision } from "@bot-nation/core-domain";
 import { sendApprovalToTelegram } from "./telegram";
 import { applyChangeForApproval } from "../services/change-apply";
@@ -12,6 +12,37 @@ approvalsRouter.get("/api/approvals", async (_req, env) => {
     "SELECT * FROM approvals ORDER BY created_at DESC"
   ).all<Approval>();
   return Response.json(result.results);
+});
+
+// ─── GET /api/approvals/inbox ────────────────────────────────────────────────
+// Must be registered BEFORE /:id to avoid route shadowing.
+
+approvalsRouter.get("/api/approvals/inbox", async (_req, env) => {
+  const rows = await query(env.DB,
+    `SELECT
+       a.id,
+       a.task_id,
+       a.requested_by_agent_id,
+       a.brief,
+       a.status,
+       a.decisions,
+       a.created_at,
+       a.updated_at,
+       p.id              AS proposal_id,
+       p.title           AS proposal_title,
+       p.type            AS proposal_type,
+       p.risk_level,
+       p.risk_affects_wallets,
+       p.risk_affects_deployment,
+       p.target_entity_kind,
+       p.target_entity_id,
+       p.change_set
+     FROM approvals a
+     LEFT JOIN proposals p ON p.approval_id = a.id
+     WHERE a.status = 'pending'
+     ORDER BY a.created_at DESC`,
+  );
+  return Response.json(rows);
 });
 
 approvalsRouter.get("/api/approvals/:id", async (req, env) => {

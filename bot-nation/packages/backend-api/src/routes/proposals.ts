@@ -2,12 +2,14 @@ import { AutoRouter, type IRequest } from "itty-router";
 import type { Env } from "../index";
 import { query, queryOne, run } from "../db/schema";
 import { sendApprovalToTelegram } from "./telegram";
+import { evaluateRisk } from "../services/risk-evaluator";
+import { checkProposalAgainstPolicy } from "../services/policy-enforcer";
+import { applyChangeFromProposal } from "../services/change-apply";
 import type { ApprovalBrief } from "@bot-nation/core-domain";
 
 export const proposalsRouter = AutoRouter<IRequest, [Env, ExecutionContext]>();
 
 // ─── GET /api/proposals ──────────────────────────────────────────────────────
-// Optional query param: ?status=draft|pending_approval|approved|rejected|applied|failed
 
 proposalsRouter.get("/api/proposals", async (req, env) => {
   const rawStatus = req.query["status"];
@@ -33,7 +35,8 @@ proposalsRouter.get("/api/proposals/:id", async (req, env) => {
 });
 
 // ─── POST /api/proposals ─────────────────────────────────────────────────────
-// Creates a proposal in "draft" status. Does NOT send to Telegram yet.
+// Creates a proposal in "draft" status.
+// If riskLevel is omitted, it is auto-evaluated from the changeSet.
 
 proposalsRouter.post("/api/proposals", async (req, env) => {
   const body = await req.json<{
@@ -53,8 +56,19 @@ proposalsRouter.post("/api/proposals", async (req, env) => {
   }>();
 
   if (!body.title || !body.summary || !body.targetEntityId || !body.targetEntityKind) {
-    return Response.json({ error: "title, summary, targetEntityKind, and targetEntityId are required" }, { status: 400 });
+    return Response.json(
+      { error: "title, summary, targetEntityKind, and targetEntityId are required" },
+      { status: 400 },
+    );
   }
+
+  const changeSet = body.changeSet ?? {};
+
+  // Auto-evaluate risk if caller didn't supply it
+  const autoRisk = evaluateRisk(changeSet, body.targetEntityKind);
+  const riskLevel = body.riskLevel ?? autoRisk.level;
+  const affectsWallets = body.riskAffectsWallets ?? autoRisk.affectsWallets;
+  const affectsDeployment = body.riskAffectsDeployment ?? autoRisk.affectsDeployment;
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -79,22 +93,25 @@ proposalsRouter.post("/api/proposals", async (req, env) => {
       body.requesterHumanId ?? null,
       body.title,
       body.summary,
-      JSON.stringify(body.changeSet ?? {}),
-      body.riskLevel ?? "low",
-      body.riskAffectsWallets ? 1 : 0,
-      body.riskAffectsDeployment ? 1 : 0,
+      JSON.stringify(changeSet),
+      riskLevel,
+      affectsWallets ? 1 : 0,
+      affectsDeployment ? 1 : 0,
       body.riskNotes ?? null,
       now,
       now,
-    ]
+    ],
   );
 
-  return Response.json({ id, status: "draft" }, { status: 201 });
+  return Response.json(
+    { id, status: "draft", riskLevel, affectsWallets, affectsDeployment },
+    { status: 201 },
+  );
 });
 
 // ─── POST /api/proposals/:id/submit ──────────────────────────────────────────
-// Transitions draft → pending_approval.
-// Creates a linked Approval record and sends the brief to Telegram.
+// Transitions draft → pending_approval (or directly to applied if auto-approved).
+// Enforces team policy before proceeding.
 
 proposalsRouter.post("/api/proposals/:id/submit", async (req, env) => {
   const id = req.params["id"];
@@ -112,17 +129,59 @@ proposalsRouter.post("/api/proposals/:id/submit", async (req, env) => {
     target_entity_kind: string;
     target_entity_id: string;
     requester_agent_id: string | null;
+    requester_team_id: string | null;
+    change_set: string;
   }>(env.DB, "SELECT * FROM proposals WHERE id = ?", [id]);
 
   if (!proposal) return new Response("Not found", { status: 404 });
   if (proposal.status !== "draft") {
-    return Response.json({ error: `Cannot submit: proposal is already '${proposal.status}'` }, { status: 409 });
+    return Response.json(
+      { error: `Cannot submit: proposal is already '${proposal.status}'` },
+      { status: 409 },
+    );
+  }
+
+  const changeSet: Record<string, unknown> = JSON.parse(proposal.change_set);
+
+  // ── policy enforcement ───────────────────────────────────────────────────
+  const policyResult = await checkProposalAgainstPolicy(
+    env.DB,
+    proposal.requester_team_id,
+    proposal.risk_level,
+    changeSet,
+  );
+
+  if (!policyResult.allowed) {
+    return Response.json(
+      { error: policyResult.reason ?? "Blocked by team policy" },
+      { status: 403 },
+    );
   }
 
   const now = new Date().toISOString();
+
+  // ── auto-approve path ────────────────────────────────────────────────────
+  // Only when team explicitly sets requiresHumanApproval: false AND risk is low
+  if (policyResult.requiresHumanApproval === false && proposal.risk_level === "low") {
+    await run(env.DB,
+      "UPDATE proposals SET status='approved', updated_at=? WHERE id=?",
+      [now, id],
+    );
+    const result = await applyChangeFromProposal(env.DB, id, proposal.requester_agent_id, null);
+    if (!result.ok) {
+      return Response.json({ error: result.error }, { status: 500 });
+    }
+    return Response.json({
+      proposalId: id,
+      status: "applied",
+      appliedFields: result.appliedFields,
+      message: "auto-approved (low risk, no human approval required)",
+    });
+  }
+
+  // ── normal path: create Approval + send Telegram ─────────────────────────
   const approvalId = crypto.randomUUID();
 
-  // Build human-readable brief for the Approval record and Telegram message
   const brief: ApprovalBrief = {
     title: proposal.title,
     summary: proposal.summary,
@@ -135,20 +194,17 @@ proposalsRouter.post("/api/proposals/:id/submit", async (req, env) => {
     ].filter(Boolean).join("; ") || "limited to target entity",
   };
 
-  // Create the Approval record
   await run(env.DB,
     `INSERT INTO approvals (id, task_id, requested_by_agent_id, brief, status, decisions, created_at, updated_at)
      VALUES (?, '', ?, ?, 'pending', '[]', ?, ?)`,
-    [approvalId, proposal.requester_agent_id ?? null, JSON.stringify(brief), now, now]
+    [approvalId, proposal.requester_agent_id ?? null, JSON.stringify(brief), now, now],
   );
 
-  // Link proposal → approval and advance status
   await run(env.DB,
     "UPDATE proposals SET status='pending_approval', approval_id=?, updated_at=? WHERE id=?",
-    [approvalId, now, id]
+    [approvalId, now, id],
   );
 
-  // Emit event
   const eventId = crypto.randomUUID();
   await run(env.DB,
     `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
@@ -157,18 +213,21 @@ proposalsRouter.post("/api/proposals/:id/submit", async (req, env) => {
       eventId,
       proposal.requester_agent_id ?? null,
       id,
-      JSON.stringify({ approvalId, targetEntityKind: proposal.target_entity_kind, targetEntityId: proposal.target_entity_id }),
+      JSON.stringify({
+        approvalId,
+        targetEntityKind: proposal.target_entity_kind,
+        targetEntityId: proposal.target_entity_id,
+      }),
       now,
       now,
-    ]
+    ],
   );
 
-  // Send brief to Telegram (best-effort — don't fail submission if Telegram is down)
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
     try {
       await sendApprovalToTelegram(env, approvalId, brief);
     } catch {
-      // Telegram delivery failure is non-fatal
+      // non-fatal
     }
   }
 
@@ -176,8 +235,6 @@ proposalsRouter.post("/api/proposals/:id/submit", async (req, env) => {
 });
 
 // ─── PATCH /api/proposals/:id ─────────────────────────────────────────────────
-// Allows updating draft proposals (title, summary, changeSet, risk fields).
-// Cannot modify submitted or applied proposals.
 
 proposalsRouter.patch("/api/proposals/:id", async (req, env) => {
   const id = req.params["id"];
@@ -222,7 +279,7 @@ proposalsRouter.patch("/api/proposals/:id", async (req, env) => {
       body.riskNotes ?? null,
       now,
       id,
-    ]
+    ],
   );
 
   return Response.json({ ok: true });

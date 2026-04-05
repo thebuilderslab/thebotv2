@@ -4,6 +4,7 @@ import { teamsRouter } from "./routes/teams";
 import { tasksRouter } from "./routes/tasks";
 import { approvalsRouter } from "./routes/approvals";
 import { proposalsRouter } from "./routes/proposals";
+import { eventsRouter } from "./routes/events";
 import { telegramRouter } from "./routes/telegram";
 import { intakeRouter } from "./routes/intake";
 
@@ -27,6 +28,7 @@ router.all("/api/teams/*", teamsRouter.fetch);
 router.all("/api/tasks/*", tasksRouter.fetch);
 router.all("/api/approvals/*", approvalsRouter.fetch);
 router.all("/api/proposals/*", proposalsRouter.fetch);
+router.all("/api/events/*", eventsRouter.fetch);
 router.all("/api/intake/*", intakeRouter.fetch);
 router.all("/telegram/*", telegramRouter.fetch);
 

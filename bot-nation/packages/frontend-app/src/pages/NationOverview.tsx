@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { agents, teams, proposals, approvals } from "../api/client";
 
 interface Counts {
@@ -57,12 +58,14 @@ export function NationOverview() {
           <div className="stat-value">{counts?.proposals ?? "—"}</div>
           <div className="stat-label">Proposals</div>
         </div>
-        <div className="stat-card">
-          <div className="stat-value" style={{ color: counts?.pendingApprovals ? "var(--yellow)" : undefined }}>
-            {counts?.pendingApprovals ?? "—"}
+        <Link to="/inbox" style={{ textDecoration: "none" }}>
+          <div className="stat-card" style={{ cursor: "pointer" }}>
+            <div className="stat-value" style={{ color: counts?.pendingApprovals ? "var(--yellow)" : undefined }}>
+              {counts?.pendingApprovals ?? "—"}
+            </div>
+            <div className="stat-label">Pending Approvals ↗</div>
           </div>
-          <div className="stat-label">Pending Approvals</div>
-        </div>
+        </Link>
       </div>
 
       <div className="card">

@@ -76,11 +76,25 @@ export const proposals = {
 export const approvals = {
   list: () => request<unknown[]>("/api/approvals"),
   get: (id: string) => request<unknown>(`/api/approvals/${id}`),
+  inbox: () => request<unknown[]>("/api/approvals/inbox"),
   decide: (id: string, body: { decision: "approved" | "rejected"; userId: string; channel: string; rationale?: string }) =>
     request<{ ok: boolean }>(`/api/approvals/${id}/decision`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
+};
+
+// ─── Events ───────────────────────────────────────────────────────────────────
+
+export const events = {
+  list: (kind?: string, targetId?: string) => {
+    const params = new URLSearchParams();
+    if (kind) params.set("kind", kind);
+    if (targetId) params.set("targetId", targetId);
+    const qs = params.toString();
+    return request<unknown[]>(`/api/events${qs ? `?${qs}` : ""}`);
+  },
+  get: (id: string) => request<unknown>(`/api/events/${id}`),
 };
 
 // ─── Health ───────────────────────────────────────────────────────────────────
