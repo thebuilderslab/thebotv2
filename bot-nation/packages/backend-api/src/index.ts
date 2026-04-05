@@ -7,6 +7,10 @@ import { proposalsRouter } from "./routes/proposals";
 import { eventsRouter } from "./routes/events";
 import { telegramRouter } from "./routes/telegram";
 import { intakeRouter } from "./routes/intake";
+import { artifactsRouter } from "./routes/artifacts";
+import { toolsRouter } from "./routes/tools";
+import { graphHandler } from "./routes/graph";
+import { statsHandler } from "./routes/stats";
 import { scheduledHandler } from "./scheduled";
 
 export interface Env {
@@ -30,6 +34,10 @@ router.all("/api/tasks/*", tasksRouter.fetch);
 router.all("/api/approvals/*", approvalsRouter.fetch);
 router.all("/api/proposals/*", proposalsRouter.fetch);
 router.all("/api/events/*", eventsRouter.fetch);
+router.all("/api/artifacts/*", artifactsRouter.fetch);
+router.all("/api/tools/*", toolsRouter.fetch);
+router.get("/api/graph", graphHandler);
+router.get("/api/stats", statsHandler);
 router.all("/api/intake/*", intakeRouter.fetch);
 router.all("/telegram/*", telegramRouter.fetch);
 

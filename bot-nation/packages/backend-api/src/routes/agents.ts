@@ -73,3 +73,51 @@ agentsRouter.patch("/api/agents/:id", async (req, env) => {
   );
   return Response.json({ ok: true });
 });
+
+// ─── Agent Notes (scratchpad) ─────────────────────────────────────────────────
+// Must be registered BEFORE /api/agents/:id to avoid shadowing.
+
+agentsRouter.get("/api/agents/:id/notes", async (req, env) => {
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
+  const rows = await query(env.DB,
+    "SELECT * FROM agent_notes WHERE agent_id = ? ORDER BY updated_at DESC", [id]);
+  return Response.json(rows);
+});
+
+agentsRouter.get("/api/agents/:id/notes/:key", async (req, env) => {
+  const id = req.params["id"];
+  const key = req.params["key"];
+  if (!id || !key) return new Response("Bad Request", { status: 400 });
+  const note = await queryOne(env.DB,
+    "SELECT * FROM agent_notes WHERE agent_id = ? AND key = ?", [id, key]);
+  if (!note) return new Response("Not found", { status: 404 });
+  return Response.json(note);
+});
+
+agentsRouter.put("/api/agents/:id/notes/:key", async (req, env) => {
+  const id = req.params["id"];
+  const key = req.params["key"];
+  if (!id || !key) return new Response("Bad Request", { status: 400 });
+  const body = await req.json<{ value: string }>();
+  if (body.value === undefined) {
+    return Response.json({ error: "value is required" }, { status: 400 });
+  }
+  const now = new Date().toISOString();
+  const noteId = crypto.randomUUID();
+  await run(env.DB,
+    `INSERT INTO agent_notes (id, agent_id, key, value, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(agent_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+    [noteId, id, key, body.value, now, now]);
+  return Response.json({ ok: true });
+});
+
+agentsRouter.delete("/api/agents/:id/notes/:key", async (req, env) => {
+  const id = req.params["id"];
+  const key = req.params["key"];
+  if (!id || !key) return new Response("Bad Request", { status: 400 });
+  await run(env.DB,
+    "DELETE FROM agent_notes WHERE agent_id = ? AND key = ?", [id, key]);
+  return Response.json({ ok: true });
+});

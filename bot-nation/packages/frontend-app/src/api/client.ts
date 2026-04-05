@@ -114,6 +114,62 @@ export const events = {
   get: (id: string) => request<unknown>(`/api/events/${id}`),
 };
 
+// ─── Artifacts ───────────────────────────────────────────────────────────────
+
+export const artifacts = {
+  list: (taskId?: string, kind?: string) => {
+    const params = new URLSearchParams();
+    if (taskId) params.set("taskId", taskId);
+    if (kind)   params.set("kind", kind);
+    const qs = params.toString();
+    return request<unknown[]>(`/api/artifacts${qs ? `?${qs}` : ""}`);
+  },
+  get: (id: string) => request<unknown>(`/api/artifacts/${id}`),
+  create: (body: unknown) =>
+    request<{ id: string }>("/api/artifacts", { method: "POST", body: JSON.stringify(body) }),
+};
+
+// ─── Agent Notes ─────────────────────────────────────────────────────────────
+
+export const notes = {
+  list: (agentId: string) => request<unknown[]>(`/api/agents/${agentId}/notes`),
+  get: (agentId: string, key: string) => request<unknown>(`/api/agents/${agentId}/notes/${key}`),
+  upsert: (agentId: string, key: string, value: string) =>
+    request<{ ok: boolean }>(`/api/agents/${agentId}/notes/${key}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    }),
+  delete: (agentId: string, key: string) =>
+    request<{ ok: boolean }>(`/api/agents/${agentId}/notes/${key}`, { method: "DELETE" }),
+};
+
+// ─── Tools ───────────────────────────────────────────────────────────────────
+
+export const tools = {
+  list: (status?: string) =>
+    request<unknown[]>(`/api/tools${status ? `?status=${status}` : ""}`),
+  get: (id: string) => request<unknown>(`/api/tools/${id}`),
+  create: (body: unknown) =>
+    request<{ id: string; status: string }>("/api/tools", { method: "POST", body: JSON.stringify(body) }),
+  setStatus: (id: string, status: "active" | "disabled" | "pending_review") =>
+    request<{ ok: boolean }>(`/api/tools/${id}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+};
+
+// ─── Graph ────────────────────────────────────────────────────────────────────
+
+export const graph = {
+  get: () => request<unknown>("/api/graph"),
+};
+
+// ─── Stats ───────────────────────────────────────────────────────────────────
+
+export const stats = {
+  get: () => request<Record<string, number>>("/api/stats"),
+};
+
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 export const health = {

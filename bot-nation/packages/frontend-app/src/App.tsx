@@ -6,6 +6,8 @@ import { Proposals } from "./pages/Proposals";
 import { ApprovalsInbox } from "./pages/ApprovalsInbox";
 import { Runs } from "./pages/Runs";
 import { EventLog } from "./pages/EventLog";
+import { Artifacts } from "./pages/Artifacts";
+import { GraphView } from "./pages/GraphView";
 import { Settings } from "./pages/Settings";
 
 const NAV = [
@@ -15,6 +17,8 @@ const NAV = [
   { to: "/inbox", icon: "◎", label: "Approval Inbox" },
   { to: "/runs", icon: "▷", label: "Runs" },
   { to: "/events", icon: "≋", label: "Event Log" },
+  { to: "/artifacts", icon: "◫", label: "Artifacts" },
+  { to: "/graph", icon: "⬡", label: "Graph" },
   { to: "/settings", icon: "⚙", label: "Settings" },
 ];
 
@@ -27,7 +31,7 @@ function Layout() {
         <div className="header-divider" />
         <span className="header-status">
           <span className="dot" />
-          v0 · Phase 1
+          v0 · Phase 3
         </span>
       </header>
 
@@ -69,6 +73,8 @@ export function App() {
         <Route path="inbox" element={<ApprovalsInbox />} />
         <Route path="runs" element={<Runs />} />
         <Route path="events" element={<EventLog />} />
+        <Route path="artifacts" element={<Artifacts />} />
+        <Route path="graph" element={<GraphView />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>
