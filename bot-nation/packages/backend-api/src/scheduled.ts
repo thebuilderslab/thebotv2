@@ -3,17 +3,16 @@
  *
  * Runs every 5 minutes (configured in wrangler.jsonc).
  *
- * Phase 2 responsibilities:
+ * Responsibilities:
  *   1. Route any pending tasks that still lack a team/agent assignment
- *   2. Transition assigned pending tasks → running (dispatch signal)
+ *   2. Transition assigned pending tasks → running, then execute via Claude
  *   3. Time out running tasks older than 10 minutes → failed
- *
- * Phase 4 will add actual LLM execution inside step 2.
  */
 
 import type { Env } from "./index";
 import { query, run } from "./db/schema";
 import { routeTask } from "./services/task-router";
+import { executeTask } from "./services/agent-executor";
 
 const DISPATCH_LIMIT = 10;        // max tasks to dispatch per cron tick
 const TIMEOUT_MINUTES = 10;       // running tasks older than this → failed
@@ -34,7 +33,7 @@ interface RunningTask {
 export async function scheduledHandler(
   _controller: ScheduledController,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<void> {
   const now = new Date().toISOString();
 
@@ -79,6 +78,14 @@ export async function scheduledHandler(
       to: "running",
       note: "dispatched by cron scheduler",
     }, null, now);
+
+    // Phase 4: execute task via Anthropic API (research + content_generation only)
+    ctx.waitUntil(
+      executeTask(env.DB, env.ANTHROPIC_API_KEY, task.id).catch((err: unknown) => {
+        // Log unhandled executor errors (failure normally handled inside executeTask)
+        console.error(`[executor] unhandled error for task ${task.id}:`, err);
+      }),
+    );
   }
 
   // ── 3. Time out stale running tasks ───────────────────────────────────────

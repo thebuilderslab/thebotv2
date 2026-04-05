@@ -17,6 +17,7 @@ export interface Env {
   DB: D1Database;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
+  ANTHROPIC_API_KEY: string;
 }
 
 const { preflight, corsify } = cors({ origin: "*" });

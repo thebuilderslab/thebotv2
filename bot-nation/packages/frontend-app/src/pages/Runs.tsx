@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { tasks } from "../api/client";
+import { tasks, artifacts } from "../api/client";
 
 type Row = Record<string, unknown>;
 type EventRow = Record<string, unknown>;
@@ -38,6 +38,8 @@ function EventKindChip({ kind }: { kind: string }) {
   return <span className="mono" style={{ fontSize: 10, color }}>{kind}</span>;
 }
 
+type ArtifactRow = Record<string, unknown>;
+
 function TaskRow({ task, onAssign }: {
   task: Row;
   onAssign: (id: string, agentId: string) => Promise<void>;
@@ -45,11 +47,14 @@ function TaskRow({ task, onAssign }: {
   const [expanded, setExpanded] = useState(false);
   const [events, setEvents] = useState<EventRow[] | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
+  const [taskArtifacts, setTaskArtifacts] = useState<ArtifactRow[] | null>(null);
   const [assignInput, setAssignInput] = useState("");
   const [assigning, setAssigning] = useState(false);
 
   const id = String(task["id"] ?? "");
   const input = (() => { try { return JSON.parse(String(task["input"] ?? "{}")) as Record<string, unknown>; } catch { return {}; } })();
+
+  const status = String(task["status"] ?? "");
 
   const loadEvents = async () => {
     if (events !== null) return;
@@ -61,9 +66,20 @@ function TaskRow({ task, onAssign }: {
     finally { setEventsLoading(false); }
   };
 
+  const loadArtifacts = async () => {
+    if (taskArtifacts !== null) return;
+    try {
+      const rows = await artifacts.list(id) as ArtifactRow[];
+      setTaskArtifacts(rows);
+    } catch { setTaskArtifacts([]); }
+  };
+
   const handleExpand = () => {
     setExpanded((v) => !v);
-    if (!expanded) void loadEvents();
+    if (!expanded) {
+      void loadEvents();
+      if (status === "completed") void loadArtifacts();
+    }
   };
 
   const handleAssign = async () => {
@@ -119,6 +135,29 @@ function TaskRow({ task, onAssign }: {
                 {assigning ? "…" : "Assign"}
               </button>
             </div>
+
+            {/* Output (completed tasks) */}
+            {status === "completed" && taskArtifacts && taskArtifacts.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>Output</div>
+                {taskArtifacts.map((a) => (
+                  <div key={String(a["id"])} style={{
+                    background: "var(--bg-base)", border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)", padding: "8px 10px", marginBottom: 6,
+                  }}>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
+                      {String(a["name"] ?? "")} · {String(a["kind"] ?? "")}
+                    </div>
+                    <pre style={{
+                      margin: 0, fontSize: 11, color: "var(--text-primary)",
+                      whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-ui)",
+                    }}>
+                      {String(a["content"] ?? "")}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Event timeline */}
             <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>Event timeline</div>

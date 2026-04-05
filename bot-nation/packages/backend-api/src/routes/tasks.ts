@@ -61,6 +61,37 @@ tasksRouter.get("/api/tasks/:id/events", async (req, env) => {
   return Response.json(events);
 });
 
+// ─── GET /api/tasks/:id/output ───────────────────────────────────────────────
+// Must be registered BEFORE /:id.
+
+tasksRouter.get("/api/tasks/:id/output", async (req, env) => {
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
+
+  const task = await queryOne<{ id: string; status: string; output: string | null }>(
+    env.DB,
+    "SELECT id, status, output FROM tasks WHERE id = ?",
+    [id],
+  );
+  if (!task) return new Response("Not found", { status: 404 });
+
+  const taskArtifacts = await query(
+    env.DB,
+    "SELECT id, kind, name, content, created_at FROM artifacts WHERE task_id = ? ORDER BY created_at ASC",
+    [id],
+  );
+
+  let output: unknown = null;
+  try { output = task.output ? JSON.parse(task.output) : null; } catch { output = task.output; }
+
+  return Response.json({
+    taskId: task.id,
+    status: task.status,
+    output,
+    artifacts: taskArtifacts,
+  });
+});
+
 // ─── GET /api/tasks/:id ──────────────────────────────────────────────────────
 
 tasksRouter.get("/api/tasks/:id", async (req, env) => {
