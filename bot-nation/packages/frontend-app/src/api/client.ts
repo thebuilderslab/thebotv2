@@ -44,8 +44,25 @@ export const teams = {
 // ─── Tasks ───────────────────────────────────────────────────────────────────
 
 export const tasks = {
-  list: () => request<unknown[]>("/api/tasks"),
+  list: (status?: string, teamId?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (teamId) params.set("teamId", teamId);
+    const qs = params.toString();
+    return request<unknown[]>(`/api/tasks${qs ? `?${qs}` : ""}`);
+  },
   get: (id: string) => request<unknown>(`/api/tasks/${id}`),
+  events: (id: string) => request<unknown[]>(`/api/tasks/${id}/events`),
+  assign: (id: string, body: { agentId?: string; teamId?: string }) =>
+    request<{ ok: boolean }>(`/api/tasks/${id}/assign`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  create: (body: unknown) =>
+    request<{ id: string; status: string; assignedAgentId: string | null; teamId: string | null }>(
+      "/api/tasks",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 };
 
 // ─── Proposals ───────────────────────────────────────────────────────────────

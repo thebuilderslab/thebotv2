@@ -7,6 +7,7 @@ import { proposalsRouter } from "./routes/proposals";
 import { eventsRouter } from "./routes/events";
 import { telegramRouter } from "./routes/telegram";
 import { intakeRouter } from "./routes/intake";
+import { scheduledHandler } from "./scheduled";
 
 export interface Env {
   DB: D1Database;
@@ -34,4 +35,5 @@ router.all("/telegram/*", telegramRouter.fetch);
 
 export default {
   fetch: router.fetch,
+  scheduled: scheduledHandler,
 } satisfies ExportedHandler<Env>;
