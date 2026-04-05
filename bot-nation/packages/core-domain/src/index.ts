@@ -8,3 +8,5 @@ export * from "./approval";
 export * from "./proposal";
 export * from "./tool";
 export * from "./event";
+export * from "./graph";
+export * from "./session";

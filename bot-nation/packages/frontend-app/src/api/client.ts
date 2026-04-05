@@ -159,6 +159,33 @@ export const tools = {
     }),
 };
 
+// ─── Actors (Durable Objects) ─────────────────────────────────────────────────
+
+export const actors = {
+  session: (agentId: string) => request<unknown>(`/api/actors/${agentId}/session`),
+  sessions: (agentId: string) => request<unknown[]>(`/api/actors/${agentId}/sessions`),
+  status: (agentId: string) => request<unknown>(`/api/actors/${agentId}/status`),
+  dispatch: (agentId: string, taskId: string) =>
+    request<{ sessionId: string; queued: boolean }>(`/api/actors/${agentId}/dispatch`, {
+      method: "POST",
+      body: JSON.stringify({ taskId }),
+    }),
+};
+
+// ─── Agent Graphs ─────────────────────────────────────────────────────────────
+
+export const graphs = {
+  list: () => request<unknown[]>("/api/graphs"),
+  listForAgent: (agentId: string) => request<unknown[]>(`/api/graphs/agent/${agentId}`),
+  get: (id: string) => request<unknown>(`/api/graphs/${id}`),
+  create: (body: unknown) =>
+    request<{ id: string }>("/api/graphs", { method: "POST", body: JSON.stringify(body) }),
+  patch: (id: string, body: unknown) =>
+    request<{ ok: boolean }>(`/api/graphs/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  delete: (id: string) =>
+    request<{ ok: boolean }>(`/api/graphs/${id}`, { method: "DELETE" }),
+};
+
 // ─── Graph ────────────────────────────────────────────────────────────────────
 
 export const graph = {

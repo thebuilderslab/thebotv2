@@ -9,6 +9,7 @@ import { EventLog } from "./pages/EventLog";
 import { Artifacts } from "./pages/Artifacts";
 import { GraphView } from "./pages/GraphView";
 import { Settings } from "./pages/Settings";
+import { AgentStream } from "./pages/AgentStream";
 
 const NAV = [
   { to: "/", icon: "⬡", label: "Overview", end: true },
@@ -19,6 +20,7 @@ const NAV = [
   { to: "/events", icon: "≋", label: "Event Log" },
   { to: "/artifacts", icon: "◫", label: "Artifacts" },
   { to: "/graph", icon: "⬡", label: "Graph" },
+  { to: "/stream", icon: "⟳", label: "Live Stream" },
   { to: "/settings", icon: "⚙", label: "Settings" },
 ];
 
@@ -31,7 +33,7 @@ function Layout() {
         <div className="header-divider" />
         <span className="header-status">
           <span className="dot" />
-          v0 · Phase 3
+          v0 · Phase 6
         </span>
       </header>
 
@@ -75,6 +77,7 @@ export function App() {
         <Route path="events" element={<EventLog />} />
         <Route path="artifacts" element={<Artifacts />} />
         <Route path="graph" element={<GraphView />} />
+        <Route path="stream" element={<AgentStream />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>

@@ -11,7 +11,10 @@ import { artifactsRouter } from "./routes/artifacts";
 import { toolsRouter } from "./routes/tools";
 import { graphHandler } from "./routes/graph";
 import { statsHandler } from "./routes/stats";
+import { actorRouter } from "./routes/actor";
+import { graphsRouter } from "./routes/graphs";
 import { scheduledHandler } from "./scheduled";
+export { AgentActor } from "./actors/AgentActor";
 
 export interface Env {
   DB: D1Database;
@@ -19,6 +22,7 @@ export interface Env {
   TELEGRAM_CHAT_ID: string;
   ANTHROPIC_API_KEY: string;
   BRAVE_SEARCH_API_KEY?: string;
+  AGENT_ACTOR: DurableObjectNamespace;
 }
 
 const { preflight, corsify } = cors({ origin: "*" });
@@ -40,6 +44,8 @@ router.all("/api/artifacts/*", artifactsRouter.fetch);
 router.all("/api/tools/*", toolsRouter.fetch);
 router.get("/api/graph", graphHandler);
 router.get("/api/stats", statsHandler);
+router.all("/api/actors/*", actorRouter.fetch);
+router.all("/api/graphs/*", graphsRouter.fetch);
 router.all("/api/intake/*", intakeRouter.fetch);
 router.all("/telegram/*", telegramRouter.fetch);
 

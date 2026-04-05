@@ -13,6 +13,20 @@
       "migrations_dir": "migrations"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AGENT_ACTOR",
+        "class_name": "AgentActor"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["AgentActor"]
+    }
+  ],
   "triggers": {
     "crons": ["*/5 * * * *"]
   }

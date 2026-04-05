@@ -14,7 +14,6 @@
 import type { Env } from "./index";
 import { query, queryOne, run } from "./db/schema";
 import { routeTask } from "./services/task-router";
-import { executeTask } from "./services/agent-executor";
 
 const DISPATCH_LIMIT = 10;
 const TIMEOUT_MINUTES = 10;
@@ -86,11 +85,27 @@ export async function scheduledHandler(
       note: "dispatched by cron scheduler",
     }, null, now);
 
-    ctx.waitUntil(
-      executeTask(env.DB, env.ANTHROPIC_API_KEY, task.id, env.BRAVE_SEARCH_API_KEY).catch((err: unknown) => {
-        console.error(`[executor] unhandled error for task ${task.id}:`, err);
-      }),
-    );
+    // Phase 6: dispatch to agent's Durable Object
+    const sessionId = crypto.randomUUID();
+    ctx.waitUntil((async () => {
+      try {
+        await run(
+          env.DB,
+          `INSERT INTO agent_sessions (id, agent_id, task_id, status, ws_connected, started_at, updated_at)
+           VALUES (?, ?, ?, 'running', 0, ?, ?)`,
+          [sessionId, task.assigned_agent_id ?? "", task.id, now, now],
+        );
+        const doId = env.AGENT_ACTOR.idFromName(task.assigned_agent_id ?? "");
+        const stub = env.AGENT_ACTOR.get(doId);
+        await stub.fetch("https://do/enqueue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taskId: task.id, sessionId }),
+        });
+      } catch (err: unknown) {
+        console.error(`[scheduler] DO dispatch failed for task ${task.id}:`, err);
+      }
+    })());
   }
 
   // ── 2.5. Re-queue waiting_children parents whose children are all done ────────

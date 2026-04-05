@@ -22,7 +22,14 @@ export type EventKind =
   | "task.status_changed"
   // Tool lifecycle
   | "tool.installed"
-  | "tool.disabled";
+  | "tool.disabled"
+  // Session lifecycle (Durable Objects)
+  | "session.started"
+  | "session.node_completed"
+  | "session.completed"
+  | "session.failed"
+  // Agent messaging
+  | "agent.message_sent";
 
 export interface Event extends WithMeta {
   kind: EventKind;
