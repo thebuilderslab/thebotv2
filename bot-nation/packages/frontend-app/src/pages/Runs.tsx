@@ -4,13 +4,14 @@ import { tasks, artifacts } from "../api/client";
 type Row = Record<string, unknown>;
 type EventRow = Record<string, unknown>;
 
-const STATUS_FILTERS = ["all", "pending", "running", "waiting_approval", "completed", "failed"] as const;
+const STATUS_FILTERS = ["all", "pending", "running", "waiting_children", "waiting_approval", "completed", "failed"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
     pending: "badge badge-gray",
     running: "badge badge-blue",
+    waiting_children: "badge badge-yellow",
     waiting_approval: "badge badge-yellow",
     approved: "badge badge-green",
     completed: "badge badge-green",
@@ -48,6 +49,7 @@ function TaskRow({ task, onAssign }: {
   const [events, setEvents] = useState<EventRow[] | null>(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [taskArtifacts, setTaskArtifacts] = useState<ArtifactRow[] | null>(null);
+  const [children, setChildren] = useState<Row[] | null>(null);
   const [assignInput, setAssignInput] = useState("");
   const [assigning, setAssigning] = useState(false);
 
@@ -74,11 +76,20 @@ function TaskRow({ task, onAssign }: {
     } catch { setTaskArtifacts([]); }
   };
 
+  const loadChildren = async () => {
+    if (children !== null) return;
+    try {
+      const rows = await tasks.children(id) as Row[];
+      setChildren(rows);
+    } catch { setChildren([]); }
+  };
+
   const handleExpand = () => {
     setExpanded((v) => !v);
     if (!expanded) {
       void loadEvents();
       if (status === "completed") void loadArtifacts();
+      if (status === "waiting_children" || !!task["parent_task_id"]) void loadChildren();
     }
   };
 
@@ -136,26 +147,88 @@ function TaskRow({ task, onAssign }: {
               </button>
             </div>
 
+            {/* Sub-tasks (waiting_children or has parent) */}
+            {(status === "waiting_children" || !!task["parent_task_id"]) && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
+                  {task["parent_task_id"]
+                    ? `Parent: ${String(task["parent_task_id"]).slice(0, 12)}…`
+                    : `Sub-tasks (${status === "waiting_children" ? "waiting" : ""})`}
+                </div>
+                {children === null && (
+                  <button className="btn" style={{ fontSize: 10, padding: "2px 8px" }} onClick={() => void loadChildren()}>
+                    Load children
+                  </button>
+                )}
+                {children && children.length === 0 && (
+                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>No sub-tasks.</div>
+                )}
+                {children && children.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {children.map((c) => {
+                      const ci = (() => { try { return JSON.parse(String(c["input"] ?? "{}")); } catch { return {}; } })() as Record<string, unknown>;
+                      return (
+                        <div key={String(c["id"])} style={{
+                          display: "flex", gap: 8, alignItems: "center",
+                          background: "var(--bg-base)", border: "1px solid var(--border)",
+                          borderRadius: "var(--radius-sm)", padding: "4px 8px", fontSize: 11,
+                        }}>
+                          <span className="mono" style={{ color: "var(--text-muted)", fontSize: 10 }}>{String(c["kind"] ?? "")}</span>
+                          <StatusBadge status={String(c["status"] ?? "pending")} />
+                          <span className="truncate" style={{ color: "var(--text-secondary)" }}>{String(ci["summary"] ?? "—")}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Output (completed tasks) */}
             {status === "completed" && taskArtifacts && taskArtifacts.length > 0 && (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>Output</div>
-                {taskArtifacts.map((a) => (
-                  <div key={String(a["id"])} style={{
-                    background: "var(--bg-base)", border: "1px solid var(--border)",
-                    borderRadius: "var(--radius-sm)", padding: "8px 10px", marginBottom: 6,
-                  }}>
-                    <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
-                      {String(a["name"] ?? "")} · {String(a["kind"] ?? "")}
-                    </div>
-                    <pre style={{
-                      margin: 0, fontSize: 11, color: "var(--text-primary)",
-                      whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-ui)",
+                {taskArtifacts.map((a) => {
+                  type ToolLogEntry = { name: string; input: unknown; result: unknown; ok: boolean };
+                  let parsed: { response?: string; toolCallLog?: ToolLogEntry[] } = {};
+                  try { parsed = JSON.parse(String(a["content"] ?? "{}")); } catch { /* raw */ }
+                  const responseText = parsed.response ?? String(a["content"] ?? "");
+                  const toolLog = parsed.toolCallLog ?? [];
+                  return (
+                    <div key={String(a["id"])} style={{
+                      background: "var(--bg-base)", border: "1px solid var(--border)",
+                      borderRadius: "var(--radius-sm)", padding: "8px 10px", marginBottom: 6,
                     }}>
-                      {String(a["content"] ?? "")}
-                    </pre>
-                  </div>
-                ))}
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
+                        {String(a["name"] ?? "")} · {String(a["kind"] ?? "")}
+                      </div>
+                      {toolLog.length > 0 && (
+                        <div style={{ marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>Tools used</div>
+                          {toolLog.map((t, i) => (
+                            <div key={i} style={{
+                              display: "flex", gap: 6, alignItems: "flex-start", fontSize: 10,
+                              borderLeft: `2px solid ${t.ok ? "var(--accent)" : "var(--red)"}`,
+                              paddingLeft: 6, marginBottom: 3,
+                            }}>
+                              <span className="mono" style={{ color: "var(--accent)", whiteSpace: "nowrap" }}>{t.name}</span>
+                              <span style={{ color: "var(--text-muted)" }}>→</span>
+                              <span className="truncate" style={{ color: "var(--text-secondary)" }}>
+                                {JSON.stringify(t.result).slice(0, 80)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      <pre style={{
+                        margin: 0, fontSize: 11, color: "var(--text-primary)",
+                        whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-ui)",
+                      }}>
+                        {responseText}
+                      </pre>
+                    </div>
+                  );
+                })}
               </div>
             )}
 

@@ -61,6 +61,20 @@ tasksRouter.get("/api/tasks/:id/events", async (req, env) => {
   return Response.json(events);
 });
 
+// ─── GET /api/tasks/:id/children ─────────────────────────────────────────────
+// Must be registered BEFORE /:id.
+
+tasksRouter.get("/api/tasks/:id/children", async (req, env) => {
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
+  const children = await query(
+    env.DB,
+    "SELECT id, kind, status, assigned_agent_id, team_id, input, output, created_at, updated_at FROM tasks WHERE parent_task_id = ? ORDER BY created_at ASC",
+    [id],
+  );
+  return Response.json(children);
+});
+
 // ─── GET /api/tasks/:id/output ───────────────────────────────────────────────
 // Must be registered BEFORE /:id.
 

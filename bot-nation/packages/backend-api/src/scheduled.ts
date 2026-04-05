@@ -3,29 +3,36 @@
  *
  * Runs every 5 minutes (configured in wrangler.jsonc).
  *
- * Responsibilities:
- *   1. Route any pending tasks that still lack a team/agent assignment
- *   2. Transition assigned pending tasks → running, then execute via Claude
- *   3. Time out running tasks older than 10 minutes → failed
+ * Steps:
+ *   1. Route unassigned pending tasks
+ *   2. Dispatch assigned pending → running + execute via Claude
+ *   2.5. Re-queue waiting_children parents whose children are all done
+ *   3. Time out stale running tasks (10 min)
+ *   4. Time out stuck waiting_children parents (60 min)
  */
 
 import type { Env } from "./index";
-import { query, run } from "./db/schema";
+import { query, queryOne, run } from "./db/schema";
 import { routeTask } from "./services/task-router";
 import { executeTask } from "./services/agent-executor";
 
-const DISPATCH_LIMIT = 10;        // max tasks to dispatch per cron tick
-const TIMEOUT_MINUTES = 10;       // running tasks older than this → failed
+const DISPATCH_LIMIT = 10;
+const TIMEOUT_MINUTES = 10;
+const PARENT_TIMEOUT_MINUTES = 60;
 
 interface PendingTask {
   id: string;
   kind: string;
   team_id: string | null;
   assigned_agent_id: string | null;
-  created_at: string;
 }
 
 interface RunningTask {
+  id: string;
+  updated_at: string;
+}
+
+interface WaitingParent {
   id: string;
   updated_at: string;
 }
@@ -37,7 +44,7 @@ export async function scheduledHandler(
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  // ── 1. Route unassigned pending tasks ─────────────────────────────────────
+  // ── 1. Route unassigned pending tasks ───────────────────────────────────────
   const unrouted = await query<PendingTask>(
     env.DB,
     "SELECT id, kind, team_id, assigned_agent_id FROM tasks WHERE status = 'pending' AND assigned_agent_id IS NULL LIMIT ?",
@@ -60,7 +67,7 @@ export async function scheduledHandler(
     }
   }
 
-  // ── 2. Dispatch: pending + assigned → running ──────────────────────────────
+  // ── 2. Dispatch: pending + assigned → running ────────────────────────────────
   const pending = await query<PendingTask>(
     env.DB,
     "SELECT id, kind, team_id, assigned_agent_id FROM tasks WHERE status = 'pending' AND assigned_agent_id IS NOT NULL LIMIT ?",
@@ -79,39 +86,78 @@ export async function scheduledHandler(
       note: "dispatched by cron scheduler",
     }, null, now);
 
-    // Phase 4: execute task via Anthropic API (research + content_generation only)
     ctx.waitUntil(
-      executeTask(env.DB, env.ANTHROPIC_API_KEY, task.id).catch((err: unknown) => {
-        // Log unhandled executor errors (failure normally handled inside executeTask)
+      executeTask(env.DB, env.ANTHROPIC_API_KEY, task.id, env.BRAVE_SEARCH_API_KEY).catch((err: unknown) => {
         console.error(`[executor] unhandled error for task ${task.id}:`, err);
       }),
     );
   }
 
-  // ── 3. Time out stale running tasks ───────────────────────────────────────
-  const cutoff = new Date(Date.now() - TIMEOUT_MINUTES * 60 * 1000).toISOString();
-  const stale = await query<RunningTask>(
+  // ── 2.5. Re-queue waiting_children parents whose children are all done ────────
+  const waitingParents = await query<WaitingParent>(
     env.DB,
-    "SELECT id, updated_at FROM tasks WHERE status = 'running' AND updated_at < ?",
-    [cutoff],
+    "SELECT id, updated_at FROM tasks WHERE status = 'waiting_children' LIMIT ?",
+    [DISPATCH_LIMIT],
   );
 
-  for (const task of stale) {
-    await run(
+  for (const parent of waitingParents) {
+    const incomplete = await queryOne<{ c: number }>(
       env.DB,
-      "UPDATE tasks SET status='failed', updated_at=? WHERE id=?",
-      [now, task.id],
+      "SELECT COUNT(*) as c FROM tasks WHERE parent_task_id = ? AND status NOT IN ('completed','failed')",
+      [parent.id],
     );
+
+    if ((incomplete?.c ?? 1) === 0) {
+      // All children done — re-queue parent as pending so it re-executes and synthesizes
+      await run(
+        env.DB,
+        "UPDATE tasks SET status='pending', updated_at=? WHERE id=?",
+        [now, parent.id],
+      );
+      await emitEvent(env.DB, "task.status_changed", null, "task", parent.id, {
+        from: "waiting_children",
+        to: "pending",
+        note: "all children completed — re-queued for synthesis",
+      }, null, now);
+    }
+  }
+
+  // ── 3. Time out stale running tasks (10 min) ──────────────────────────────
+  const runningCutoff = new Date(Date.now() - TIMEOUT_MINUTES * 60 * 1000).toISOString();
+  const staleRunning = await query<RunningTask>(
+    env.DB,
+    "SELECT id, updated_at FROM tasks WHERE status = 'running' AND updated_at < ?",
+    [runningCutoff],
+  );
+
+  for (const task of staleRunning) {
+    await run(env.DB, "UPDATE tasks SET status='failed', updated_at=? WHERE id=?", [now, task.id]);
     await emitEvent(env.DB, "task.status_changed", null, "task", task.id, {
-      from: "running",
-      to: "failed",
+      from: "running", to: "failed",
       note: `timed out after ${TIMEOUT_MINUTES} minutes`,
+      lastUpdatedAt: task.updated_at,
+    }, null, now);
+  }
+
+  // ── 4. Time out stuck waiting_children parents (60 min) ───────────────────
+  const parentCutoff = new Date(Date.now() - PARENT_TIMEOUT_MINUTES * 60 * 1000).toISOString();
+  const staleParents = await query<RunningTask>(
+    env.DB,
+    "SELECT id, updated_at FROM tasks WHERE status = 'waiting_children' AND updated_at < ?",
+    [parentCutoff],
+  );
+
+  for (const task of staleParents) {
+    await run(env.DB, "UPDATE tasks SET status='failed', updated_at=? WHERE id=?", [now, task.id]);
+    await emitEvent(env.DB, "task.status_changed", null, "task", task.id, {
+      from: "waiting_children", to: "failed",
+      note: `parent timed out after ${PARENT_TIMEOUT_MINUTES} minutes waiting for children`,
       lastUpdatedAt: task.updated_at,
     }, null, now);
   }
 }
 
-// ── helper: emit event row ─────────────────────────────────────────────────
+// ── helper: emit event row ────────────────────────────────────────────────────
 
 async function emitEvent(
   db: D1Database,

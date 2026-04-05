@@ -18,6 +18,7 @@ export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
   ANTHROPIC_API_KEY: string;
+  BRAVE_SEARCH_API_KEY?: string;
 }
 
 const { preflight, corsify } = cors({ origin: "*" });

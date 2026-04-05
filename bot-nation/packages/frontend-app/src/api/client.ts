@@ -53,6 +53,7 @@ export const tasks = {
   },
   get: (id: string) => request<unknown>(`/api/tasks/${id}`),
   events: (id: string) => request<unknown[]>(`/api/tasks/${id}/events`),
+  children: (id: string) => request<unknown[]>(`/api/tasks/${id}/children`),
   assign: (id: string, body: { agentId?: string; teamId?: string }) =>
     request<{ ok: boolean }>(`/api/tasks/${id}/assign`, {
       method: "PATCH",
