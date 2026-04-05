@@ -1,0 +1,16 @@
+﻿{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bot-nation-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pbot-nation-db",
+      "database_id": "53800135-51c4-459f-837e-2606b4431762",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

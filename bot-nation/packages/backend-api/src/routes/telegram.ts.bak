@@ -1,0 +1,55 @@
+﻿import { AutoRouter } from "itty-router";
+import type { Env } from "../index";
+import type { ApprovalBrief } from "@bot-nation/core-domain";
+
+export const telegramRouter = AutoRouter<Request, [Env, ExecutionContext]>();
+
+telegramRouter.post("/telegram/webhook", async (req, env) => {
+  const update = await req.json<TelegramUpdate>();
+  if (update.callback_query) {
+    const { data } = update.callback_query;
+    if (!data) return new Response("OK");
+    const [, approvalId, decision] = data.split(":");
+    if (!approvalId || !decision) return new Response("OK");
+    if (decision !== "approved" && decision !== "rejected") return new Response("OK");
+    const now = new Date().toISOString();
+    await env.DB.prepare("UPDATE approvals SET status=?, updated_at=? WHERE id=?")
+      .bind(decision, now, approvalId).run();
+    await env.DB.prepare("UPDATE tasks SET status=?, updated_at=? WHERE approval_id=?")
+      .bind(decision, now, approvalId).run();
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ callback_query_id: update.callback_query.id, text: `Marked as ${decision}` }),
+    });
+  }
+  return new Response("OK");
+});
+
+export async function sendApprovalToTelegram(env: Env, approvalId: string, brief: ApprovalBrief): Promise<void> {
+  const emoji: Record<string, string> = { low: "ðŸŸ¢", medium: "ðŸŸ¡", high: "ðŸ”´", critical: "ðŸš¨" };
+  const text =
+    `*${brief.title}*\n\n${brief.summary}\n\n` +
+    `${emoji[brief.risk] ?? "âšª"} Risk: *${brief.risk}*\n` +
+    `ðŸ’¡ Benefit: ${brief.expectedBenefit}\n` +
+    `ðŸ’¥ Blast radius: ${brief.blastRadius}`;
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      chat_id: env.TELEGRAM_CHAT_ID,
+      text,
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "Approve", callback_data: `approval:${approvalId}:approved` },
+          { text: "Reject", callback_data: `approval:${approvalId}:rejected` },
+        ]],
+      },
+    }),
+  });
+}
+
+interface TelegramUpdate {
+  callback_query?: { id: string; from: { id: number }; data?: string };
+}
