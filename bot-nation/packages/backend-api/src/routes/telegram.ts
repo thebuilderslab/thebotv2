@@ -18,6 +18,7 @@ import type { Env } from "../index";
 import type { ApprovalBrief } from "@bot-nation/core-domain";
 import { applyChangeForApproval } from "../services/change-apply";
 import { query, queryOne, run } from "../db/schema";
+import { sanitiseInput } from "../services/guardrails";
 
 export const telegramRouter = AutoRouter();
 
@@ -41,6 +42,14 @@ telegramRouter.post("/telegram", async (req, env: Env) => {
   if (update.message) {
     const chatId = update.message.chat.id;
     const text = update.message.text?.trim() ?? "";
+
+    // ── Guardrail: Sender authentication ─────────────────────────────────────
+    // Only process commands from the configured chat ID.
+    // Silently drop messages from unknown chats — no response prevents enumeration.
+    if (String(chatId) !== String(env.TELEGRAM_CHAT_ID)) {
+      console.warn(`[Guardrail] Telegram message from unauthorised chat ${chatId} — dropped`);
+      return new Response("OK");
+    }
 
     await handleCommand(chatId, text, env);
     return new Response("OK");
@@ -114,7 +123,15 @@ async function handleTaskCommand(chatId: number, args: string[], env: Env): Prom
   }
 
   const kind = (args[0] ?? "").toLowerCase();
-  const summary = args.slice(1).join(" ");
+  const rawSummary = args.slice(1).join(" ");
+
+  // Sanitise user input before storing or routing
+  const { safe: summary, flagged, reasons } = sanitiseInput(rawSummary);
+  if (flagged) {
+    await sendMessage(env, chatId,
+      `⚠️ Input contained restricted patterns and was sanitised:\n\`${reasons.join("; ")}\``
+    );
+  }
 
   const routing = TASK_KIND_ROUTING[kind];
   if (!routing) {

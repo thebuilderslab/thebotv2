@@ -15,6 +15,13 @@ import OpenAI from "openai";
 import { query, queryOne, run } from "../db/schema";
 import { executeTool } from "../services/tool-executor";
 import { resolveModel, OPENROUTER_BASE_URL, OPENROUTER_APP_NAME, OPENROUTER_APP_URL } from "../services/model-router";
+import {
+  sanitiseInput,
+  guardSpawn,
+  checkGraphNodeCap,
+  MAX_LOOP_ITERATIONS,
+  makeGuardrailEvent,
+} from "../services/guardrails";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -37,6 +44,7 @@ interface TaskRow {
   input: string;
   output: string | null;
   parent_task_id: string | null;
+  spawn_depth: number;
 }
 
 interface AgentRow {
@@ -220,7 +228,7 @@ export class AgentActor implements DurableObject {
     // Load task
     const task = await queryOne<TaskRow>(
       this.env.DB,
-      "SELECT id, kind, input, output, parent_task_id FROM tasks WHERE id = ?",
+      "SELECT id, kind, input, output, parent_task_id, spawn_depth FROM tasks WHERE id = ?",
       [taskId],
     );
     if (!task) throw new Error(`Task ${taskId} not found`);
@@ -255,6 +263,17 @@ export class AgentActor implements DurableObject {
     // Parse task input
     let taskInput: { summary?: string; details?: string } = {};
     try { taskInput = JSON.parse(task.input) as typeof taskInput; } catch { /* ignore */ }
+
+    // ── Guardrail 1: Input sanitisation ───────────────────────────────────────
+    const summaryGuard = sanitiseInput(taskInput.summary ?? "");
+    const detailsGuard = sanitiseInput(taskInput.details ?? "");
+    if (summaryGuard.flagged || detailsGuard.flagged) {
+      const reasons = [...summaryGuard.reasons, ...detailsGuard.reasons];
+      console.warn(`[Guardrail] Input flagged for task ${taskId}:`, reasons);
+      await this.emitEvent(taskId, "guardrail.input_flagged",
+        makeGuardrailEvent("input_sanitisation", reasons.join("; "), taskId), now);
+    }
+    taskInput = { summary: summaryGuard.safe, details: detailsGuard.safe };
 
     // Load child results (parent re-execution after spawn)
     const children = await query<ChildRow>(
@@ -295,7 +314,7 @@ export class AgentActor implements DurableObject {
     const spawnMatch = finalText.match(/<SPAWN_TASKS>\s*([\s\S]*?)\s*<\/SPAWN_TASKS>/);
     const spawnJson = spawnMatch?.[1];
     if (spawnMatch && spawnJson) {
-      const spawned = await this.handleSpawn(spawnJson, taskId, agentId, now);
+      const spawned = await this.handleSpawn(spawnJson, taskId, agentId, now, task.spawn_depth);
       if (spawned) {
         await this.updateSession(sessionId, "completed", now);
         return;
@@ -340,21 +359,30 @@ export class AgentActor implements DurableObject {
   ): Promise<string> {
     const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
     let currentNodeId = graph.startNode;
-    let prevOutput = childResultsText || [
-      task.input ? (JSON.parse(task.input) as { summary?: string }).summary ?? "" : "",
-    ].join("");
+    // Original task summary — always available for {{task}} substitution
+    let taskInput: { summary?: string; details?: string } = {};
+    try { taskInput = JSON.parse(task.input) as typeof taskInput; } catch { /* ignore */ }
+    const taskSummary = taskInput.summary ?? task.input ?? "";
+    let prevOutput = childResultsText || taskSummary;
     let lastText = "";
 
     const systemPrompt = this.buildSystemPrompt(agent, notesText);
-    const toolRows = await query<ToolRow>(
-      this.env.DB,
-      "SELECT name, description, schema FROM tools WHERE status = 'active'",
-      [],
-    );
-    const openaiTools = this.buildOpenAITools(toolRows);
+    // Graph LLM nodes do NOT receive tools — tool invocation uses dedicated tool_call nodes.
+    // Passing tools to streaming LLM nodes causes agentic models (Kimi, GLM) to call tools
+    // mid-stream, which the streaming path cannot handle.
     const now = new Date().toISOString();
+    let nodesExecuted = 0;
 
     while (currentNodeId) {
+      // ── Guardrail 4: Graph node execution cap ──────────────────────────────
+      if (!checkGraphNodeCap(nodesExecuted)) {
+        console.warn(`[Guardrail] Graph node cap reached for task ${taskId} after ${nodesExecuted} nodes`);
+        await this.emitEvent(taskId, "guardrail.graph_cap",
+          makeGuardrailEvent("graph_node_cap", `Stopped after ${nodesExecuted} nodes`, taskId), now);
+        break;
+      }
+      nodesExecuted++;
+
       const node = nodeMap.get(currentNodeId);
       if (!node || node.kind === "end") break;
 
@@ -364,8 +392,11 @@ export class AgentActor implements DurableObject {
       this.broadcast(JSON.stringify({ type: "node_start", nodeId: node.id, label: node.label ?? node.id }));
 
       if (node.kind === "llm_call") {
-        const prompt = (node.prompt ?? "Continue: {{prev}}").replace("{{prev}}", prevOutput);
-        nodeOutput = await this.streamingLlmCall(systemPrompt, prompt, openaiTools, modelConfig);
+        const prompt = (node.prompt ?? "Continue: {{prev}}")
+          .replace("{{prev}}", prevOutput)
+          .replace("{{task}}", taskSummary);
+        // No tools passed — graph LLM nodes are pure text generation steps
+        nodeOutput = await this.streamingLlmCall(systemPrompt, prompt, [], modelConfig);
         lastText = nodeOutput;
       } else if (node.kind === "tool_call" && node.toolName) {
         const toolInput: Record<string, unknown> = { query: prevOutput, message: prevOutput };
@@ -449,7 +480,8 @@ export class AgentActor implements DurableObject {
         },
       });
 
-      while (iterations < 10) {
+      // ── Guardrail 5: Loop iteration cap ─────────────────────────────────────
+      while (iterations < MAX_LOOP_ITERATIONS) {
         iterations++;
         const response = await client.chat.completions.create({
           model: modelConfig.model,
@@ -493,7 +525,8 @@ export class AgentActor implements DurableObject {
       const anthropicTools = this.buildAnthropicTools(toolRows);
       const anthropicMessages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
 
-      while (iterations < 10) {
+      // ── Guardrail 5: Loop iteration cap (Anthropic fallback) ────────────────
+      while (iterations < MAX_LOOP_ITERATIONS) {
         iterations++;
         const response = await anthropic.messages.create({
           model: "claude-haiku-4-5",
@@ -604,20 +637,40 @@ export class AgentActor implements DurableObject {
     taskId: string,
     agentId: string,
     now: string,
+    currentDepth: number,
   ): Promise<boolean> {
     try {
-      const spawnList = JSON.parse(spawnJson) as Array<{ kind: string; summary: string; details?: string }>;
+      const rawList = JSON.parse(spawnJson) as Array<{ kind: string; summary: string; details?: string }>;
+
+      // ── Guardrail 2 & 3: Spawn depth + count limit ────────────────────────
+      const guard = guardSpawn(rawList, currentDepth);
+      if (!guard.allowed) {
+        console.warn(`[Guardrail] Spawn blocked for task ${taskId}: ${guard.reason}`);
+        await this.emitEvent(taskId, "guardrail.spawn_blocked",
+          makeGuardrailEvent("spawn_depth", guard.reason ?? "depth limit", taskId), now);
+        return false;
+      }
+      const spawnList = guard.clampedList ?? rawList;
+      if (guard.reason) {
+        console.warn(`[Guardrail] ${guard.reason} for task ${taskId}`);
+        await this.emitEvent(taskId, "guardrail.spawn_clamped",
+          makeGuardrailEvent("spawn_count", guard.reason, taskId), now);
+      }
+
       const childIds: string[] = [];
+      const childDepth = currentDepth + 1;
 
       for (const spawn of spawnList) {
+        // Sanitise spawned task summary before storing
+        const { safe: safeSummary } = sanitiseInput(spawn.summary);
         const childId = crypto.randomUUID();
-        // Route via same agent (simple default) — real routing handled by cron
         await run(
           this.env.DB,
-          `INSERT INTO tasks (id, kind, status, parent_task_id, assigned_agent_id, input, created_at, updated_at)
-           VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)`,
+          `INSERT INTO tasks (id, kind, status, parent_task_id, assigned_agent_id, input, spawn_depth, created_at, updated_at)
+           VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
           [childId, spawn.kind, taskId, agentId,
-           JSON.stringify({ summary: spawn.summary, details: spawn.details ?? "" }), now, now],
+           JSON.stringify({ summary: safeSummary, details: spawn.details ?? "" }),
+           childDepth, now, now],
         );
         childIds.push(childId);
       }
