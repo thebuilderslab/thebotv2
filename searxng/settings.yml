@@ -1,24 +1,21 @@
-# SearXNG settings for Bot Nation deployment
-# Deploy this as a Railway/Render/Fly.io service using the searxng/searxng Docker image.
-# Mount this file to /etc/searxng/settings.yml inside the container.
-
 general:
   instance_name: "Bot Nation Search"
   debug: false
 
 search:
-  # Safe search off — research agents need all results
   safe_search: 0
   autocomplete: ""
   default_lang: "en"
-  # Max 10 results per engine (matches tool-executor count cap)
-  max_results: 10
+  # json format MUST be listed here — this is what tool-executor.ts calls
+  formats:
+    - html
+    - json
 
 server:
   port: 8080
   bind_address: "0.0.0.0"
-  secret_key: "change-this-to-a-random-string-32-chars"
-  # Allow JSON output format — REQUIRED for tool-executor.ts
+  # SEARXNG_SECRET_KEY env var overrides this at container startup
+  secret_key: "bot-nation-searxng-2026-xk92mf7pqz"
   public_instance: false
   image_proxy: false
 
@@ -26,13 +23,7 @@ ui:
   static_use_hash: true
   default_theme: simple
 
-# Output formats — json MUST be enabled for the API
-formats:
-  - html
-  - json
-
 engines:
-  # Primary engines — best coverage for research tasks
   - name: google
     engine: google
     shortcut: g
@@ -51,29 +42,13 @@ engines:
     disabled: false
     timeout: 6.0
 
-  # Wikipedia for factual knowledge questions
   - name: wikipedia
     engine: wikipedia
     shortcut: wp
     disabled: false
     timeout: 4.0
 
-  # GitHub for code/library research tasks
-  - name: github
-    engine: github
-    shortcut: gh
-    disabled: false
-    timeout: 5.0
-
 outgoing:
-  # Number of parallel requests SearXNG sends to engines
-  max_request_pool_size: 10
   request_timeout: 8.0
-  # Randomise user-agent to reduce blocking
-  useragent_suffix: ""
   pool_connections: 100
   pool_maxsize: 20
-
-redis:
-  # Disable Redis for simple Railway deploys — SearXNG runs fine without it
-  url: false
