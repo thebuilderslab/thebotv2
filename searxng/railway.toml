@@ -1,0 +1,14 @@
+[build]
+# Use the official SearXNG Docker image — no custom Dockerfile needed
+dockerfilePath = ""
+builder = "DOCKERFILE"
+
+[deploy]
+startCommand = ""
+healthcheckPath = "/healthz"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+[[services]]
+name = "searxng"
