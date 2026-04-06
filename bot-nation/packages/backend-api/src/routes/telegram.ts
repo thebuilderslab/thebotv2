@@ -25,6 +25,7 @@ export const telegramRouter = AutoRouter();
 // ── Valid task kinds ──────────────────────────────────────────────────────────
 
 const TASK_KIND_ROUTING: Record<string, { teamId: string; agentId: string }> = {
+  // Bot Nation core
   research:             { teamId: "team-research", agentId: "agent-research-lead" },
   deep_research:        { teamId: "team-research", agentId: "agent-research-lead" },
   content_generation:   { teamId: "team-growth",   agentId: "agent-growth-lead" },
@@ -32,6 +33,16 @@ const TASK_KIND_ROUTING: Record<string, { teamId: string; agentId: string }> = {
   improvement_proposal: { teamId: "team-build",     agentId: "agent-build-lead" },
   config_change:        { teamId: "team-infra",     agentId: "agent-infra-lead" },
   wallet_simulation:    { teamId: "team-finance",   agentId: "agent-finance-lead" },
+  // projecT87 DeFi
+  defi_plan:            { teamId: "team-p87",       agentId: "agent-p87-planner" },
+  defi_risk_check:      { teamId: "team-p87",       agentId: "agent-p87-risk" },
+  defi_health_monitor:  { teamId: "team-p87",       agentId: "agent-p87-nurse" },
+  defi_report:          { teamId: "team-p87",       agentId: "agent-p87-nurse" },
+  // The Agency sales
+  market_research:      { teamId: "team-agency",    agentId: "agent-agency-growthops" },
+  campaign_generation:  { teamId: "team-agency",    agentId: "agent-agency-growthops" },
+  lead_qualification:   { teamId: "team-agency",    agentId: "agent-agency-pipelineops" },
+  crm_hygiene:          { teamId: "team-agency",    agentId: "agent-agency-revops" },
 };
 
 // ── Main webhook handler ──────────────────────────────────────────────────────

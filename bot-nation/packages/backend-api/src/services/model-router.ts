@@ -83,6 +83,56 @@ const KIND_MODEL_MAP: Record<string, ModelConfig> = {
     maxTokens: 2048,
     temperature: 0.1,
   },
+  // ── projecT87 DeFi task kinds ────────────────────────────────────────────────
+  defi_plan: {
+    model: MODELS.QWEN_397B,       // strong reasoning for DAG planning
+    fallback: MODELS.GLM_5,
+    maxTokens: 4096,
+    temperature: 0.2,
+  },
+  defi_risk_check: {
+    model: MODELS.QWEN_397B,       // deterministic policy evaluation
+    fallback: MODELS.AUTO,
+    maxTokens: 1024,
+    temperature: 0.0,
+  },
+  defi_health_monitor: {
+    model: MODELS.GEMINI_FLASH,    // fast, cheap, frequent polling
+    fallback: MODELS.QWEN_397B,
+    maxTokens: 1024,
+    temperature: 0.1,
+  },
+  defi_report: {
+    model: MODELS.KIMI_K2_5,       // long-context PnL + performance reports
+    fallback: MODELS.GEMINI_FLASH,
+    maxTokens: 4096,
+    temperature: 0.3,
+  },
+  // ── Agency sales task kinds ──────────────────────────────────────────────────
+  market_research: {
+    model: MODELS.KIMI_K2_5,       // deep ICP / market analysis
+    fallback: MODELS.AUTO,
+    maxTokens: 4096,
+    temperature: 0.6,
+  },
+  campaign_generation: {
+    model: MODELS.GEMINI_FLASH,    // fast multilingual content
+    fallback: MODELS.KIMI_K2_5,
+    maxTokens: 2048,
+    temperature: 0.9,
+  },
+  lead_qualification: {
+    model: MODELS.GLM_5,           // structured scoring + reasoning
+    fallback: MODELS.QWEN_397B,
+    maxTokens: 1024,
+    temperature: 0.2,
+  },
+  crm_hygiene: {
+    model: MODELS.GEMINI_FLASH,    // fast, cheap, high-volume CRM tasks
+    fallback: MODELS.AUTO,
+    maxTokens: 1024,
+    temperature: 0.1,
+  },
   vision: {
     model: MODELS.GLM_5V_TURBO,
     fallback: MODELS.KIMI_K2_5,

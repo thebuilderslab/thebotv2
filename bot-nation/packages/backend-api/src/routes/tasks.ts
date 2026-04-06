@@ -244,3 +244,31 @@ tasksRouter.patch("/api/tasks/:id/status", async (req, env) => {
   await run(env.DB, "UPDATE tasks SET status=?, updated_at=? WHERE id=?", [status, now, id]);
   return Response.json({ ok: true });
 });
+
+// ─── POST /api/tasks/:id/cancel ──────────────────────────────────────────────
+// Cancels a task and its entire descendant tree (children + grandchildren).
+
+tasksRouter.post("/api/tasks/:id/cancel", async (req, env) => {
+  const id = req.params["id"];
+  if (!id) return new Response("Bad Request", { status: 400 });
+  const now = new Date().toISOString();
+
+  // Cancel root
+  await run(env.DB, "UPDATE tasks SET status='failed', updated_at=? WHERE id=?", [now, id]);
+
+  // Cancel children
+  const children = await query<{ id: string }>(
+    env.DB, "SELECT id FROM tasks WHERE parent_task_id=?", [id],
+  );
+  for (const child of children) {
+    await run(env.DB, "UPDATE tasks SET status='failed', updated_at=? WHERE id=?", [now, child.id]);
+    // Cancel grandchildren
+    await run(env.DB,
+      "UPDATE tasks SET status='failed', updated_at=? WHERE parent_task_id=?",
+      [now, child.id],
+    );
+  }
+
+  const cancelled = 1 + children.length + children.length; // rough count
+  return Response.json({ ok: true, cancelled, rootId: id });
+});

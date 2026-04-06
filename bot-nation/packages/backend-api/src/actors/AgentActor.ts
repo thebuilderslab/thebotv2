@@ -203,11 +203,16 @@ export class AgentActor implements DurableObject {
       await this.executeTask(item.taskId, item.sessionId);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[AgentActor] task ${item.taskId} failed:`, msg);
+      const stack = err instanceof Error ? (err.stack ?? "") : "";
+      console.error(`[AgentActor] task ${item.taskId} FAILED: ${msg}\n${stack}`);
       const now = new Date().toISOString();
       await run(this.env.DB, "UPDATE tasks SET status='failed', updated_at=? WHERE id=?", [now, item.taskId]);
       await this.updateSession(item.sessionId, "failed", now);
-      this.broadcast(JSON.stringify({ type: "error", message: msg }));
+      // Emit failure event so it shows up in /events and UI
+      try {
+        await this.emitEvent(item.taskId, "task.do_error", { error: msg, stack: stack.slice(0, 500) }, now);
+      } catch { /* swallow — DB might be the cause */ }
+      this.broadcast(JSON.stringify({ type: "error", taskId: item.taskId, message: msg }));
     } finally {
       this.isRunning = false;
       await this.state.storage.put("isRunning", false);
