@@ -317,27 +317,56 @@ export class AgentActor implements DurableObject {
     const modelConfig = resolveModel(task.kind, agent.domain);
     this.broadcast(JSON.stringify({ type: "model_selected", model: modelConfig.model, taskKind: task.kind }));
 
+    let promptTokens = 0;
+    let completionTokens = 0;
+
     if (graphRow) {
       // ── Graph traversal ────────────────────────────────────────────────────
+      // Graph handles decomposition internally via nodes/edges — no SPAWN_TASKS check needed.
       const graph = JSON.parse(graphRow.definition) as GraphDefinition;
-      finalText = await this.traverseGraph(graph, task, agent, notesText, childResultsText, taskId, sessionId, graphRow.id, modelConfig);
+      const graphResult = await this.traverseGraph(graph, task, agent, notesText, childResultsText, taskId, sessionId, graphRow.id, modelConfig);
+      finalText = graphResult.text;
+      promptTokens = graphResult.promptTokens;
+      completionTokens = graphResult.completionTokens;
     } else {
       // ── Flat tool-use loop (fallback) ──────────────────────────────────────
-      finalText = await this.flatToolLoop(task, agent, notesText, childResultsText, taskId, sessionId, modelConfig);
-    }
+      const loopResult = await this.flatToolLoop(task, agent, notesText, childResultsText, taskId, sessionId, modelConfig);
+      finalText = loopResult.text;
+      promptTokens = loopResult.promptTokens;
+      completionTokens = loopResult.completionTokens;
 
-    // Check for SPAWN_TASKS
-    const spawnMatch = finalText.match(/<SPAWN_TASKS>\s*([\s\S]*?)\s*<\/SPAWN_TASKS>/);
-    const spawnJson = spawnMatch?.[1];
-    if (spawnMatch && spawnJson) {
-      const spawned = await this.handleSpawn(spawnJson, taskId, agentId, now, task.spawn_depth);
-      if (spawned) {
-        await this.updateSession(sessionId, "completed", now);
-        return;
+      // Check for SPAWN_TASKS — only in flat loop mode; graph mode handles decomposition structurally.
+      const spawnMatch = finalText.match(/<SPAWN_TASKS>\s*([\s\S]*?)\s*<\/SPAWN_TASKS>/);
+      const spawnJson = spawnMatch?.[1];
+      if (spawnMatch && spawnJson) {
+        const spawned = await this.handleSpawn(spawnJson, taskId, agentId, now, task.spawn_depth);
+        if (spawned) {
+          await this.updateSession(sessionId, "completed", now);
+          return;
+        }
       }
     }
 
-    // Store artifact
+    // Store cost artifact — tracks token usage for billing / observability
+    const costArtifactId = crypto.randomUUID();
+    const modelUsed = graphRow
+      ? (JSON.parse(graphRow.definition) as GraphDefinition).nodes[0]?.model ?? modelConfig.model
+      : modelConfig.model;
+    await run(
+      this.env.DB,
+      `INSERT INTO artifacts (id, kind, name, url, content, task_id, created_at, updated_at)
+       VALUES (?, 'cost', ?, '', ?, ?, ?, ?)`,
+      [
+        costArtifactId,
+        `${taskId}-cost`,
+        JSON.stringify({ model: modelUsed, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }),
+        taskId, now, now,
+      ],
+    );
+    await this.emitEvent(taskId, "task.cost_reported",
+      { model: modelUsed, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }, now);
+
+    // Store response artifact
     artifactId = crypto.randomUUID();
     const artifactContent = JSON.stringify({ response: finalText });
     await run(
@@ -372,7 +401,7 @@ export class AgentActor implements DurableObject {
     sessionId: string,
     graphId: string,
     modelConfig: { model: string; fallback: string; maxTokens: number; temperature: number },
-  ): Promise<string> {
+  ): Promise<{ text: string; promptTokens: number; completionTokens: number }> {
     const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
     let currentNodeId = graph.startNode;
     // Original task summary — always available for {{task}} substitution
@@ -388,6 +417,8 @@ export class AgentActor implements DurableObject {
     // mid-stream, which the streaming path cannot handle.
     const now = new Date().toISOString();
     let nodesExecuted = 0;
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
 
     while (currentNodeId) {
       // ── Guardrail 4: Graph node execution cap ──────────────────────────────
@@ -415,7 +446,10 @@ export class AgentActor implements DurableObject {
         const nodeModelConfig = node.model
           ? { ...modelConfig, model: node.model }
           : modelConfig;
-        nodeOutput = await this.streamingLlmCall(systemPrompt, prompt, [], nodeModelConfig);
+        const llmResult = await this.streamingLlmCall(systemPrompt, prompt, [], nodeModelConfig);
+        nodeOutput = llmResult.text;
+        totalPromptTokens += llmResult.promptTokens;
+        totalCompletionTokens += llmResult.completionTokens;
         lastText = nodeOutput;
       } else if (node.kind === "tool_call" && node.toolName) {
         const toolInput: Record<string, unknown> = { query: prevOutput, message: prevOutput };
@@ -449,7 +483,7 @@ export class AgentActor implements DurableObject {
       prevOutput = nodeOutput;
     }
 
-    return lastText || prevOutput;
+    return { text: lastText || prevOutput, promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens };
   }
 
   // ── Flat tool-use loop (no graph) ───────────────────────────────────────────
@@ -462,7 +496,7 @@ export class AgentActor implements DurableObject {
     taskId: string,
     _sessionId: string,
     modelConfig: { model: string; fallback: string; maxTokens: number; temperature: number },
-  ): Promise<string> {
+  ): Promise<{ text: string; promptTokens: number; completionTokens: number }> {
     let taskInput: { summary?: string; details?: string } = {};
     try { taskInput = JSON.parse(task.input) as typeof taskInput; } catch { /* ignore */ }
 
@@ -485,6 +519,8 @@ export class AgentActor implements DurableObject {
     ];
     let finalText = "";
     let iterations = 0;
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
 
     // Use OpenRouter if key available, else fall back to Anthropic
     const useOpenRouter = !!this.env.OPENROUTER_API_KEY;
@@ -513,6 +549,8 @@ export class AgentActor implements DurableObject {
         const choice = response.choices[0];
         const msg = choice?.message;
         const stopReason = choice?.finish_reason;
+        totalPromptTokens += response.usage?.prompt_tokens ?? 0;
+        totalCompletionTokens += response.usage?.completion_tokens ?? 0;
 
         if (stopReason === "stop") {
           finalText = msg?.content ?? "";
@@ -554,6 +592,8 @@ export class AgentActor implements DurableObject {
           tools: anthropicTools.length > 0 ? anthropicTools : undefined,
           messages: anthropicMessages,
         });
+        totalPromptTokens += response.usage.input_tokens;
+        totalCompletionTokens += response.usage.output_tokens;
 
         if (response.stop_reason === "end_turn") {
           const block = response.content.find((b) => b.type === "text");
@@ -587,22 +627,24 @@ export class AgentActor implements DurableObject {
       }
     }
 
-    return finalText;
+    return { text: finalText, promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens };
   }
 
-  // ── Graph LLM call (non-streaming with 25s timeout) ──────────────────────
+  // ── Graph LLM call (non-streaming with 55s timeout) ──────────────────────
   // Graph nodes use non-streaming to avoid hanging SSE connections.
   // Tokens are broadcast to WS clients after the full response arrives.
-  // A 25-second AbortSignal prevents indefinite hangs on slow models.
+  // Returns text + token usage for cost tracking.
 
   private async streamingLlmCall(
     systemPrompt: string,
     userMessage: string,
     _tools: OpenAI.Chat.ChatCompletionTool[],   // tools unused — graph nodes are pure text
     modelConfig: { model: string; maxTokens: number; temperature: number },
-  ): Promise<string> {
+  ): Promise<{ text: string; promptTokens: number; completionTokens: number }> {
     this.broadcast(JSON.stringify({ type: "stream_start" }));
     let fullText = "";
+    let promptTokens = 0;
+    let completionTokens = 0;
 
     const timeout = AbortSignal.timeout(55_000);
 
@@ -631,6 +673,8 @@ export class AgentActor implements DurableObject {
       );
 
       fullText = response.choices[0]?.message?.content ?? "";
+      promptTokens = response.usage?.prompt_tokens ?? 0;
+      completionTokens = response.usage?.completion_tokens ?? 0;
     } else {
       // Anthropic fallback
       const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
@@ -642,12 +686,14 @@ export class AgentActor implements DurableObject {
       });
       const block = response.content.find((b) => b.type === "text");
       fullText = block?.type === "text" ? block.text : "";
+      promptTokens = response.usage.input_tokens;
+      completionTokens = response.usage.output_tokens;
     }
 
     // Broadcast full text as a single token event for WS clients
     if (fullText) this.broadcast(JSON.stringify({ type: "token", text: fullText }));
-    this.broadcast(JSON.stringify({ type: "stream_end" }));
-    return fullText;
+    this.broadcast(JSON.stringify({ type: "stream_end", promptTokens, completionTokens }));
+    return { text: fullText, promptTokens, completionTokens };
   }
 
   // ── Spawn sub-tasks ─────────────────────────────────────────────────────────

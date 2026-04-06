@@ -13,6 +13,7 @@ import { graphHandler } from "./routes/graph";
 import { statsHandler } from "./routes/stats";
 import { actorRouter } from "./routes/actor";
 import { graphsRouter } from "./routes/graphs";
+import { nationRouter } from "./routes/nation";
 import { scheduledHandler } from "./scheduled";
 export { AgentActor } from "./actors/AgentActor";
 
@@ -49,6 +50,7 @@ router.get("/api/stats", statsHandler);
 router.all("/api/actors/*", actorRouter.fetch);
 router.all("/api/graphs/*", graphsRouter.fetch);
 router.all("/api/intake/*", intakeRouter.fetch);
+router.all("/api/nation/*", nationRouter.fetch);
 router.all("/telegram/*", telegramRouter.fetch);
 
 export default {
