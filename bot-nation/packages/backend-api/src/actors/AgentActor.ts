@@ -73,6 +73,7 @@ interface GraphNode {
   toolName?: string;
   targetAgentId?: string;
   label?: string;
+  model?: string;   // optional per-node model override (e.g. fast classify node)
 }
 
 interface GraphEdge {
@@ -166,9 +167,10 @@ export class AgentActor implements DurableObject {
     this.taskQueue.push(item);
     await this.state.storage.put("taskQueue", this.taskQueue);
 
-    if (!this.isRunning) {
-      await this.state.storage.setAlarm(Date.now() + 10);
-    }
+    // Always set the alarm — drainQueue handles concurrency via isRunning.
+    // If isRunning is stuck from a previous crashed execution, the alarm firing
+    // will trigger the stale-lock recovery in drainQueue.
+    await this.state.storage.setAlarm(Date.now() + 10);
 
     return Response.json({ queued: true, queueLength: this.taskQueue.length });
   }
@@ -188,7 +190,16 @@ export class AgentActor implements DurableObject {
   }
 
   private async drainQueue(): Promise<void> {
-    if (this.isRunning || this.taskQueue.length === 0) return;
+    // Stale-lock recovery: if alarm fires while isRunning=true, the previous task
+    // timed out or the DO was killed mid-execution. Reset the lock so the next
+    // queued task can proceed. The cron timeout checker handles marking the
+    // stuck task as failed in D1.
+    if (this.isRunning) {
+      console.warn("[AgentActor] stale isRunning lock detected — resetting");
+      this.isRunning = false;
+      await this.state.storage.put("isRunning", false);
+    }
+    if (this.taskQueue.length === 0) return;
 
     this.isRunning = true;
     await this.state.storage.put("isRunning", true);
@@ -400,8 +411,11 @@ export class AgentActor implements DurableObject {
         const prompt = (node.prompt ?? "Continue: {{prev}}")
           .replace("{{prev}}", prevOutput)
           .replace("{{task}}", taskSummary);
-        // No tools passed — graph LLM nodes are pure text generation steps
-        nodeOutput = await this.streamingLlmCall(systemPrompt, prompt, [], modelConfig);
+        // Allow per-node model override (e.g. Gemini Flash for classify nodes)
+        const nodeModelConfig = node.model
+          ? { ...modelConfig, model: node.model }
+          : modelConfig;
+        nodeOutput = await this.streamingLlmCall(systemPrompt, prompt, [], nodeModelConfig);
         lastText = nodeOutput;
       } else if (node.kind === "tool_call" && node.toolName) {
         const toolInput: Record<string, unknown> = { query: prevOutput, message: prevOutput };
@@ -576,16 +590,21 @@ export class AgentActor implements DurableObject {
     return finalText;
   }
 
-  // ── Streaming LLM call (for graph nodes, OpenRouter SSE) ───────────────────
+  // ── Graph LLM call (non-streaming with 25s timeout) ──────────────────────
+  // Graph nodes use non-streaming to avoid hanging SSE connections.
+  // Tokens are broadcast to WS clients after the full response arrives.
+  // A 25-second AbortSignal prevents indefinite hangs on slow models.
 
   private async streamingLlmCall(
     systemPrompt: string,
     userMessage: string,
-    tools: OpenAI.Chat.ChatCompletionTool[],
+    _tools: OpenAI.Chat.ChatCompletionTool[],   // tools unused — graph nodes are pure text
     modelConfig: { model: string; maxTokens: number; temperature: number },
   ): Promise<string> {
     this.broadcast(JSON.stringify({ type: "stream_start" }));
     let fullText = "";
+
+    const timeout = AbortSignal.timeout(55_000);
 
     if (this.env.OPENROUTER_API_KEY) {
       const client = new OpenAI({
@@ -597,27 +616,23 @@ export class AgentActor implements DurableObject {
         },
       });
 
-      const stream = await client.chat.completions.create({
-        model: modelConfig.model,
-        max_tokens: modelConfig.maxTokens,
-        temperature: modelConfig.temperature,
-        stream: true,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
-        ...(tools.length > 0 ? { tools } : {}),
-      });
+      const response = await client.chat.completions.create(
+        {
+          model: modelConfig.model,
+          max_tokens: modelConfig.maxTokens,
+          temperature: modelConfig.temperature,
+          stream: false,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMessage },
+          ],
+        },
+        { signal: timeout },
+      );
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta;
-        if (delta?.content) {
-          fullText += delta.content;
-          this.broadcast(JSON.stringify({ type: "token", text: delta.content }));
-        }
-      }
+      fullText = response.choices[0]?.message?.content ?? "";
     } else {
-      // Anthropic fallback (non-streaming)
+      // Anthropic fallback
       const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
       const response = await anthropic.messages.create({
         model: "claude-haiku-4-5",
@@ -627,10 +642,10 @@ export class AgentActor implements DurableObject {
       });
       const block = response.content.find((b) => b.type === "text");
       fullText = block?.type === "text" ? block.text : "";
-      // Simulate streaming for WS clients
-      this.broadcast(JSON.stringify({ type: "token", text: fullText }));
     }
 
+    // Broadcast full text as a single token event for WS clients
+    if (fullText) this.broadcast(JSON.stringify({ type: "token", text: fullText }));
     this.broadcast(JSON.stringify({ type: "stream_end" }));
     return fullText;
   }
