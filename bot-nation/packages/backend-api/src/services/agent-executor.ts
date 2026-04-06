@@ -68,6 +68,7 @@ export async function executeTask(
   apiKey: string,
   taskId: string,
   braveApiKey?: string,
+  searxngBaseUrl?: string,
 ): Promise<ExecuteTaskResult> {
   const now = new Date().toISOString();
 
@@ -212,7 +213,7 @@ export async function executeTask(
           if (block.type !== "tool_use") continue;
 
           const toolInput = block.input as Record<string, unknown>;
-          const callResult = await executeTool(db, braveApiKey, block.name, toolInput);
+          const callResult = await executeTool(db, { searxngBaseUrl, braveApiKey }, block.name, toolInput);
 
           toolCallLog.push({
             name: block.name,

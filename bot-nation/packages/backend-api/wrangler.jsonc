@@ -29,5 +29,11 @@
   ],
   "triggers": {
     "crons": ["*/5 * * * *"]
+  },
+  "vars": {
+    // Set this to your SearXNG instance URL after deploying to Railway/Render/Fly.io.
+    // No API key needed — SearXNG is self-hosted and open.
+    // Example: "https://my-searxng.up.railway.app"
+    "SEARXNG_BASE_URL": ""
   }
 }

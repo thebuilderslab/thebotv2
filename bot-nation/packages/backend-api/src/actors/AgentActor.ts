@@ -29,6 +29,7 @@ interface ActorEnv {
   DB: D1Database;
   ANTHROPIC_API_KEY: string;
   BRAVE_SEARCH_API_KEY?: string;
+  SEARXNG_BASE_URL?: string;
   AGENT_ACTOR: DurableObjectNamespace;
   OPENROUTER_API_KEY?: string;
 }
@@ -453,7 +454,7 @@ export class AgentActor implements DurableObject {
         lastText = nodeOutput;
       } else if (node.kind === "tool_call" && node.toolName) {
         const toolInput: Record<string, unknown> = { query: prevOutput, message: prevOutput };
-        const result = await executeTool(this.env.DB, this.env.BRAVE_SEARCH_API_KEY, node.toolName, toolInput);
+        const result = await executeTool(this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY }, node.toolName, toolInput);
         nodeOutput = JSON.stringify(result.result ?? result.error);
         nodeOk = result.ok;
         this.broadcast(JSON.stringify({ type: "tool_result", toolName: node.toolName, ok: result.ok }));
@@ -562,7 +563,7 @@ export class AgentActor implements DurableObject {
           for (const tc of msg.tool_calls) {
             if (tc.type !== "function") continue;
             const toolInput = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-            const callResult = await executeTool(this.env.DB, this.env.BRAVE_SEARCH_API_KEY, tc.function.name, toolInput);
+            const callResult = await executeTool(this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY }, tc.function.name, toolInput);
             messages.push({
               role: "tool",
               tool_call_id: tc.id,
@@ -607,7 +608,7 @@ export class AgentActor implements DurableObject {
           for (const block of response.content) {
             if (block.type !== "tool_use") continue;
             const callResult = await executeTool(
-              this.env.DB, this.env.BRAVE_SEARCH_API_KEY,
+              this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY },
               block.name, block.input as Record<string, unknown>,
             );
             toolResults.push({

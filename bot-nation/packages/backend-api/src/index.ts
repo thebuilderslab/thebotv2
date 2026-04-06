@@ -23,6 +23,7 @@ export interface Env {
   TELEGRAM_CHAT_ID: string;
   ANTHROPIC_API_KEY: string;
   BRAVE_SEARCH_API_KEY?: string;
+  SEARXNG_BASE_URL?: string;
   AGENT_ACTOR: DurableObjectNamespace;
   OPENROUTER_API_KEY?: string;
   GITHUB_TOKEN?: string;

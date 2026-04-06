@@ -1,12 +1,13 @@
 /**
- * Tool Executor — Phase 5
+ * Tool Executor — Phase 5 / Phase 8C
  *
  * Looks up a tool by name, calls its endpoint via fetch(), and returns
- * the result to be fed back into Claude as a tool_result message.
+ * the result to be fed back into the LLM as a tool_result message.
  *
  * Supported kinds:
+ *   searxng    — GET {searxngBaseUrl}/search?q=...&format=json  (preferred, no API key)
+ *   web_search — GET tool.endpoint with Brave Search query params + auth header (legacy)
  *   http_api   — POST body as JSON to tool.endpoint
- *   web_search — GET tool.endpoint with Brave Search query params + auth header
  */
 
 import { queryOne } from "../db/schema";
@@ -15,6 +16,12 @@ export interface ToolCallResult {
   ok: boolean;
   result?: unknown;
   error?: string;
+}
+
+/** Injected from Worker Env — only one needs to be set. SearXNG takes priority. */
+export interface SearchConfig {
+  searxngBaseUrl?: string;   // e.g. https://searxng.up.railway.app
+  braveApiKey?: string;      // legacy fallback
 }
 
 interface ToolRow {
@@ -27,7 +34,7 @@ interface ToolRow {
 
 export async function executeTool(
   db: D1Database,
-  braveApiKey: string | undefined,
+  searchConfig: SearchConfig,
   toolName: string,
   toolInput: Record<string, unknown>,
 ): Promise<ToolCallResult> {
@@ -50,8 +57,15 @@ export async function executeTool(
 
   // ── Dispatch by kind ───────────────────────────────────────────────────────
   try {
+    if (tool.kind === "searxng") {
+      // SearXNG: use the URL stored in tool.endpoint as the instance base URL,
+      // overridden by SEARXNG_BASE_URL env var if present.
+      const base = searchConfig.searxngBaseUrl ?? tool.endpoint;
+      return await executeSearXNG(base, toolInput);
+    }
     if (tool.kind === "web_search") {
-      return await executeWebSearch(tool.endpoint, toolInput, braveApiKey);
+      // Legacy Brave Search path — kept as fallback
+      return await executeWebSearch(tool.endpoint, toolInput, searchConfig.braveApiKey);
     }
     // Default: http_api — POST JSON body
     return await executeHttpApi(tool.endpoint, toolInput);
@@ -59,6 +73,40 @@ export async function executeTool(
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: `Tool '${toolName}' fetch error: ${msg}` };
   }
+}
+
+// ── searxng: self-hosted metasearch (no API key) ──────────────────────────────
+
+async function executeSearXNG(
+  baseUrl: string,
+  input: Record<string, unknown>,
+): Promise<ToolCallResult> {
+  const q = String(input["query"] ?? "");
+  if (!q) return { ok: false, error: "web_search: missing query" };
+
+  const count = Math.min(Number(input["count"] ?? 5), 10);
+  // engines param lets SearXNG fan-out to Google + Bing + DuckDuckGo simultaneously
+  const url = `${baseUrl.replace(/\/$/, "")}/search?q=${encodeURIComponent(q)}&format=json&engines=google,bing,duckduckgo&pageno=1`;
+
+  const res = await fetch(url, {
+    headers: { "Accept": "application/json" },
+    // SearXNG can be slow on cold aggregation — give it 15s
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!res.ok) {
+    return { ok: false, error: `SearXNG HTTP ${res.status}` };
+  }
+
+  const data = await res.json<{ results?: Array<Record<string, unknown>> }>();
+  const results = (data.results ?? []).slice(0, count).map((r) => ({
+    title:       r["title"]   ?? "",
+    url:         r["url"]     ?? "",
+    description: r["content"] ?? r["description"] ?? "",  // SearXNG uses "content"
+    engine:      r["engine"]  ?? "",
+  }));
+
+  return { ok: true, result: results };
 }
 
 // ── http_api: POST JSON ────────────────────────────────────────────────────────
