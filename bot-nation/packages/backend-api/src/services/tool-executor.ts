@@ -90,8 +90,8 @@ async function executeSearXNG(
 
   const res = await fetch(url, {
     headers: { "Accept": "application/json" },
-    // SearXNG can be slow on cold aggregation — give it 15s
-    signal: AbortSignal.timeout(15_000),
+    // 35s covers Render free tier cold start (~30s) + search aggregation time
+    signal: AbortSignal.timeout(35_000),
   });
 
   if (!res.ok) {
