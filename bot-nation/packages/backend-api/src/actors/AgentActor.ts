@@ -70,7 +70,7 @@ interface GraphNode {
 interface GraphEdge {
   from: string;
   to: string;
-  condition: "always" | "on_success" | "on_failure";
+  condition: "always" | "on_success" | "on_failure" | string;
 }
 
 interface GraphDefinition {
@@ -387,6 +387,11 @@ export class AgentActor implements DurableObject {
         if (e.condition === "always") return true;
         if (e.condition === "on_success") return nodeOk;
         if (e.condition === "on_failure") return !nodeOk;
+        // Content-based branch: "contains:KEYWORD" — matches if prevOutput includes KEYWORD
+        if (e.condition.startsWith("contains:")) {
+          const keyword = e.condition.slice("contains:".length);
+          return nodeOutput.toUpperCase().includes(keyword.toUpperCase());
+        }
         return false;
       });
 
