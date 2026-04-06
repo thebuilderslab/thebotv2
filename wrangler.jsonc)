@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "thebotv2",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": { "DEBUG_ROUTES": "true", "FORCE_RESTART": "76" },
+  "assets": {
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "html_handling": "auto-trailing-slash",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html"], "fallthrough": false },
+    { "type": "Data", "globs": ["**/*.png"], "fallthrough": false }
+  ],
+  "build": { "command": "npm run build" },
+  "durable_objects": {
+    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["Sandbox"] }
+  ],
+  "r2_buckets": [
+    { "binding": "BUCKET", "bucket_name": "thebotv2-data", "preview_bucket_name": "thebotv2-data" }
+  ],
+  "browser": { "binding": "BROWSER" }
+}

@@ -1,18 +1,20 @@
 /**
- * AgentActor — Durable Object (Phase 6)
+ * AgentActor — Durable Object (Phase 7)
  *
  * One persistent DO instance per agent (keyed by agent_id).
  * Responsibilities:
  *   - Maintains a task queue across invocations
- *   - Executes tasks via Claude with optional graph traversal
+ *   - Executes tasks via OpenRouter (model-routed) or Anthropic fallback
  *   - Streams token chunks to connected WebSocket clients
  *   - Supports agent-to-agent messaging via DO stub calls
  *   - Uses alarms for immediate dispatch + 15-min execution timeout
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { query, queryOne, run } from "../db/schema";
 import { executeTool } from "../services/tool-executor";
+import { resolveModel, OPENROUTER_BASE_URL, OPENROUTER_APP_NAME, OPENROUTER_APP_URL } from "../services/model-router";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -21,6 +23,7 @@ interface ActorEnv {
   ANTHROPIC_API_KEY: string;
   BRAVE_SEARCH_API_KEY?: string;
   AGENT_ACTOR: DurableObjectNamespace;
+  OPENROUTER_API_KEY?: string;
 }
 
 interface QueuedTask {
@@ -40,6 +43,7 @@ interface AgentRow {
   id: string;
   name: string;
   role: string;
+  domain: string;
   description: string | null;
 }
 
@@ -226,7 +230,7 @@ export class AgentActor implements DurableObject {
     if (!agentId) throw new Error("AgentActor: DO must be keyed by agent_id (use idFromName)");
     const agent = await queryOne<AgentRow>(
       this.env.DB,
-      "SELECT id, name, role, description FROM agents WHERE id = ?",
+      "SELECT id, name, role, domain, description FROM agents WHERE id = ?",
       [agentId],
     );
     if (!agent) throw new Error(`Agent ${agentId} not found`);
@@ -274,13 +278,17 @@ export class AgentActor implements DurableObject {
     let finalText = "";
     let artifactId: string | undefined;
 
+    // Resolve model for this task
+    const modelConfig = resolveModel(task.kind, agent.domain);
+    this.broadcast(JSON.stringify({ type: "model_selected", model: modelConfig.model, taskKind: task.kind }));
+
     if (graphRow) {
       // ── Graph traversal ────────────────────────────────────────────────────
       const graph = JSON.parse(graphRow.definition) as GraphDefinition;
-      finalText = await this.traverseGraph(graph, task, agent, notesText, childResultsText, taskId, sessionId, graphRow.id);
+      finalText = await this.traverseGraph(graph, task, agent, notesText, childResultsText, taskId, sessionId, graphRow.id, modelConfig);
     } else {
-      // ── Flat tool-use loop (fallback — same as agent-executor.ts) ──────────
-      finalText = await this.flatToolLoop(task, agent, notesText, childResultsText, taskId, sessionId);
+      // ── Flat tool-use loop (fallback) ──────────────────────────────────────
+      finalText = await this.flatToolLoop(task, agent, notesText, childResultsText, taskId, sessionId, modelConfig);
     }
 
     // Check for SPAWN_TASKS
@@ -328,6 +336,7 @@ export class AgentActor implements DurableObject {
     taskId: string,
     sessionId: string,
     graphId: string,
+    modelConfig: { model: string; fallback: string; maxTokens: number; temperature: number },
   ): Promise<string> {
     const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
     let currentNodeId = graph.startNode;
@@ -337,13 +346,12 @@ export class AgentActor implements DurableObject {
     let lastText = "";
 
     const systemPrompt = this.buildSystemPrompt(agent, notesText);
-    const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
     const toolRows = await query<ToolRow>(
       this.env.DB,
       "SELECT name, description, schema FROM tools WHERE status = 'active'",
       [],
     );
-    const anthropicTools = this.buildAnthropicTools(toolRows);
+    const openaiTools = this.buildOpenAITools(toolRows);
     const now = new Date().toISOString();
 
     while (currentNodeId) {
@@ -357,7 +365,7 @@ export class AgentActor implements DurableObject {
 
       if (node.kind === "llm_call") {
         const prompt = (node.prompt ?? "Continue: {{prev}}").replace("{{prev}}", prevOutput);
-        nodeOutput = await this.streamingLlmCall(anthropic, systemPrompt, prompt, anthropicTools);
+        nodeOutput = await this.streamingLlmCall(systemPrompt, prompt, openaiTools, modelConfig);
         lastText = nodeOutput;
       } else if (node.kind === "tool_call" && node.toolName) {
         const toolInput: Record<string, unknown> = { query: prevOutput, message: prevOutput };
@@ -374,7 +382,6 @@ export class AgentActor implements DurableObject {
         sessionId, graphId, nodeId: node.id, ok: nodeOk,
       }, now);
 
-      // Follow edge
       const edge = graph.edges.find((e) => {
         if (e.from !== currentNodeId) return false;
         if (e.condition === "always") return true;
@@ -399,6 +406,7 @@ export class AgentActor implements DurableObject {
     childResultsText: string,
     taskId: string,
     _sessionId: string,
+    modelConfig: { model: string; fallback: string; maxTokens: number; temperature: number },
   ): Promise<string> {
     let taskInput: { summary?: string; details?: string } = {};
     try { taskInput = JSON.parse(task.input) as typeof taskInput; } catch { /* ignore */ }
@@ -411,89 +419,173 @@ export class AgentActor implements DurableObject {
       childResultsText ? "\n\nSynthesize the sub-task results into a final structured response." : "",
     ].join("").trim();
 
-    const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
     const toolRows = await query<ToolRow>(
       this.env.DB,
       "SELECT name, description, schema FROM tools WHERE status = 'active'",
       [],
     );
-    const anthropicTools = this.buildAnthropicTools(toolRows);
-    const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
+    const openaiTools = this.buildOpenAITools(toolRows);
+    const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: "user", content: userMessage },
+    ];
     let finalText = "";
     let iterations = 0;
 
-    while (iterations < 10) {
-      iterations++;
-      const response = await anthropic.messages.create({
-        model: "claude-haiku-4-5",
-        max_tokens: 1024,
-        system: systemPrompt,
-        tools: anthropicTools.length > 0 ? anthropicTools : undefined,
-        messages,
+    // Use OpenRouter if key available, else fall back to Anthropic
+    const useOpenRouter = !!this.env.OPENROUTER_API_KEY;
+
+    if (useOpenRouter) {
+      const client = new OpenAI({
+        baseURL: OPENROUTER_BASE_URL,
+        apiKey: this.env.OPENROUTER_API_KEY!,
+        defaultHeaders: {
+          "HTTP-Referer": OPENROUTER_APP_URL,
+          "X-Title": OPENROUTER_APP_NAME,
+        },
       });
 
-      if (response.stop_reason === "end_turn") {
+      while (iterations < 10) {
+        iterations++;
+        const response = await client.chat.completions.create({
+          model: modelConfig.model,
+          max_tokens: modelConfig.maxTokens,
+          temperature: modelConfig.temperature,
+          messages: [{ role: "system", content: systemPrompt }, ...messages],
+          ...(openaiTools.length > 0 ? { tools: openaiTools } : {}),
+        });
+
+        const choice = response.choices[0];
+        const msg = choice?.message;
+        const stopReason = choice?.finish_reason;
+
+        if (stopReason === "stop") {
+          finalText = msg?.content ?? "";
+          break;
+        }
+
+        if (stopReason === "tool_calls" && msg?.tool_calls?.length) {
+          messages.push({ role: "assistant", content: msg.content ?? "", tool_calls: msg.tool_calls });
+          for (const tc of msg.tool_calls) {
+            if (tc.type !== "function") continue;
+            const toolInput = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+            const callResult = await executeTool(this.env.DB, this.env.BRAVE_SEARCH_API_KEY, tc.function.name, toolInput);
+            messages.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              content: callResult.ok ? JSON.stringify(callResult.result) : `Error: ${callResult.error}`,
+            });
+            this.broadcast(JSON.stringify({ type: "tool_call", toolName: tc.function.name, ok: callResult.ok }));
+          }
+          continue;
+        }
+
+        finalText = msg?.content ?? "";
+        break;
+      }
+    } else {
+      // Anthropic fallback
+      const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
+      const anthropicTools = this.buildAnthropicTools(toolRows);
+      const anthropicMessages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
+
+      while (iterations < 10) {
+        iterations++;
+        const response = await anthropic.messages.create({
+          model: "claude-haiku-4-5",
+          max_tokens: modelConfig.maxTokens,
+          system: systemPrompt,
+          tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+          messages: anthropicMessages,
+        });
+
+        if (response.stop_reason === "end_turn") {
+          const block = response.content.find((b) => b.type === "text");
+          finalText = block?.type === "text" ? block.text : "";
+          break;
+        }
+
+        if (response.stop_reason === "tool_use") {
+          anthropicMessages.push({ role: "assistant", content: response.content });
+          const toolResults: Anthropic.ToolResultBlockParam[] = [];
+          for (const block of response.content) {
+            if (block.type !== "tool_use") continue;
+            const callResult = await executeTool(
+              this.env.DB, this.env.BRAVE_SEARCH_API_KEY,
+              block.name, block.input as Record<string, unknown>,
+            );
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: block.id,
+              content: callResult.ok ? JSON.stringify(callResult.result) : `Error: ${callResult.error}`,
+            });
+            this.broadcast(JSON.stringify({ type: "tool_call", toolName: block.name, ok: callResult.ok }));
+          }
+          anthropicMessages.push({ role: "user", content: toolResults });
+          continue;
+        }
+
         const block = response.content.find((b) => b.type === "text");
         finalText = block?.type === "text" ? block.text : "";
         break;
       }
-
-      if (response.stop_reason === "tool_use") {
-        messages.push({ role: "assistant", content: response.content });
-        const toolResults: Anthropic.ToolResultBlockParam[] = [];
-        for (const block of response.content) {
-          if (block.type !== "tool_use") continue;
-          const callResult = await executeTool(
-            this.env.DB, this.env.BRAVE_SEARCH_API_KEY,
-            block.name, block.input as Record<string, unknown>,
-          );
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: callResult.ok ? JSON.stringify(callResult.result) : `Error: ${callResult.error}`,
-          });
-          this.broadcast(JSON.stringify({ type: "tool_call", toolName: block.name, ok: callResult.ok }));
-        }
-        messages.push({ role: "user", content: toolResults });
-        continue;
-      }
-
-      const block = response.content.find((b) => b.type === "text");
-      finalText = block?.type === "text" ? block.text : "";
-      break;
     }
 
     return finalText;
   }
 
-  // ── Streaming LLM call (for graph nodes) ────────────────────────────────────
+  // ── Streaming LLM call (for graph nodes, OpenRouter SSE) ───────────────────
 
   private async streamingLlmCall(
-    anthropic: Anthropic,
     systemPrompt: string,
     userMessage: string,
-    tools: Anthropic.Tool[],
+    tools: OpenAI.Chat.ChatCompletionTool[],
+    modelConfig: { model: string; maxTokens: number; temperature: number },
   ): Promise<string> {
     this.broadcast(JSON.stringify({ type: "stream_start" }));
     let fullText = "";
 
-    const stream = anthropic.messages.stream({
-      model: "claude-haiku-4-5",
-      max_tokens: 1024,
-      system: systemPrompt,
-      tools: tools.length > 0 ? tools : undefined,
-      messages: [{ role: "user", content: userMessage }],
-    });
+    if (this.env.OPENROUTER_API_KEY) {
+      const client = new OpenAI({
+        baseURL: OPENROUTER_BASE_URL,
+        apiKey: this.env.OPENROUTER_API_KEY,
+        defaultHeaders: {
+          "HTTP-Referer": OPENROUTER_APP_URL,
+          "X-Title": OPENROUTER_APP_NAME,
+        },
+      });
 
-    for await (const event of stream) {
-      if (
-        event.type === "content_block_delta" &&
-        event.delta.type === "text_delta"
-      ) {
-        const chunk = event.delta.text;
-        fullText += chunk;
-        this.broadcast(JSON.stringify({ type: "token", text: chunk }));
+      const stream = await client.chat.completions.create({
+        model: modelConfig.model,
+        max_tokens: modelConfig.maxTokens,
+        temperature: modelConfig.temperature,
+        stream: true,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userMessage },
+        ],
+        ...(tools.length > 0 ? { tools } : {}),
+      });
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta;
+        if (delta?.content) {
+          fullText += delta.content;
+          this.broadcast(JSON.stringify({ type: "token", text: delta.content }));
+        }
       }
+    } else {
+      // Anthropic fallback (non-streaming)
+      const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
+      const response = await anthropic.messages.create({
+        model: "claude-haiku-4-5",
+        max_tokens: modelConfig.maxTokens,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userMessage }],
+      });
+      const block = response.content.find((b) => b.type === "text");
+      fullText = block?.type === "text" ? block.text : "";
+      // Simulate streaming for WS clients
+      this.broadcast(JSON.stringify({ type: "token", text: fullText }));
     }
 
     this.broadcast(JSON.stringify({ type: "stream_end" }));
@@ -574,6 +666,19 @@ export class AgentActor implements DurableObject {
       "If you need to delegate to sub-tasks, output a SPAWN_TASKS block:",
       "<SPAWN_TASKS>[{\"kind\":\"research\",\"summary\":\"...\"}]</SPAWN_TASKS>",
     ].join("\n").trim();
+  }
+
+  private buildOpenAITools(toolRows: ToolRow[]): OpenAI.Chat.ChatCompletionTool[] {
+    return toolRows.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description ?? t.name,
+        parameters: (t.schema
+          ? JSON.parse(t.schema)
+          : { type: "object", properties: {} }) as Record<string, unknown>,
+      },
+    }));
   }
 
   private buildAnthropicTools(toolRows: ToolRow[]): Anthropic.Tool[] {
