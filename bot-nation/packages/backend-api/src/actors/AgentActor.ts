@@ -646,7 +646,9 @@ export class AgentActor implements DurableObject {
     let promptTokens = 0;
     let completionTokens = 0;
 
-    const timeout = AbortSignal.timeout(55_000);
+    // 110s wall-clock timeout — Kimi K2.5 first-token latency can exceed 55s on loaded nodes.
+    // CPU idle time (network wait) does not count against DO's 30s CPU cap.
+    const timeout = AbortSignal.timeout(110_000);
 
     if (this.env.OPENROUTER_API_KEY) {
       const client = new OpenAI({
