@@ -43,7 +43,12 @@ const TASK_KIND_ROUTING: Record<string, { teamId: string; agentId: string }> = {
   campaign_generation:  { teamId: "team-agency",    agentId: "agent-agency-growthops" },
   lead_qualification:   { teamId: "team-agency",    agentId: "agent-agency-pipelineops" },
   crm_hygiene:          { teamId: "team-agency",    agentId: "agent-agency-revops" },
+  // Intel — repo + link review
+  intel_review:         { teamId: "team-intel",     agentId: "agent-intel-lead" },
 };
+
+// ── URL patterns that trigger automatic intel review ─────────────────────────
+const INTEL_URL_PATTERN = /https?:\/\/(github\.com|gitlab\.com|bitbucket\.org|instagram\.com|twitter\.com|x\.com|ossinsight\.io)[^\s]*/gi;
 
 // ── Main webhook handler ──────────────────────────────────────────────────────
 
@@ -52,14 +57,28 @@ telegramRouter.post("/telegram", async (req, env: Env) => {
 
   if (update.message) {
     const chatId = update.message.chat.id;
-    const text = update.message.text?.trim() ?? "";
 
     // ── Guardrail: Sender authentication ─────────────────────────────────────
-    // Only process commands from the configured chat ID.
-    // Silently drop messages from unknown chats — no response prevents enumeration.
     if (String(chatId) !== String(env.TELEGRAM_CHAT_ID)) {
       console.warn(`[Guardrail] Telegram message from unauthorised chat ${chatId} — dropped`);
       return new Response("OK");
+    }
+
+    // ── Voice note → transcribe → route as text ──────────────────────────────
+    if (update.message.voice ?? update.message.audio) {
+      await handleVoiceMessage(chatId, update.message, env);
+      return new Response("OK");
+    }
+
+    const text = update.message.text?.trim() ?? "";
+
+    // ── Auto intel review: GitHub/social URLs sent as plain message ──────────
+    if (!text.startsWith("/") && text.length > 0) {
+      const urlMatches = text.match(INTEL_URL_PATTERN);
+      if (urlMatches && urlMatches.length > 0) {
+        await handleIntelReview(chatId, urlMatches, text, env);
+        return new Response("OK");
+      }
     }
 
     await handleCommand(chatId, text, env);
@@ -406,12 +425,150 @@ export async function sendApprovalToTelegram(
   });
 }
 
+// ── Voice note handler ────────────────────────────────────────────────────────
+
+async function handleVoiceMessage(
+  chatId: number,
+  message: NonNullable<TelegramUpdate["message"]>,
+  env: Env,
+): Promise<void> {
+  const fileId = message.voice?.file_id ?? message.audio?.file_id;
+  if (!fileId) return;
+
+  await sendMessage(env, chatId, "🎙️ Voice note received — transcribing...");
+
+  try {
+    // 1. Get file download path from Telegram
+    const fileRes = await fetch(
+      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${fileId}`,
+    );
+    const fileData = await fileRes.json<{ ok: boolean; result: { file_path: string } }>();
+    if (!fileData.ok) {
+      await sendMessage(env, chatId, "❌ Failed to retrieve voice file from Telegram.");
+      return;
+    }
+
+    // 2. Download the audio file (.ogg opus)
+    const audioRes = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`,
+    );
+    const audioBuffer = await audioRes.arrayBuffer();
+
+    // 3. Transcribe via Cloudflare Workers AI (Whisper)
+    let transcribedText = "";
+    if (env.AI) {
+      const result = await env.AI.run("@cf/openai/whisper", {
+        audio: [...new Uint8Array(audioBuffer)],
+      }) as { text?: string };
+      transcribedText = result.text?.trim() ?? "";
+    } else {
+      await sendMessage(env, chatId, "⚠️ AI binding not configured — add `ai` binding to wrangler.jsonc");
+      return;
+    }
+
+    if (!transcribedText) {
+      await sendMessage(env, chatId, "❌ Could not transcribe audio — try speaking more clearly.");
+      return;
+    }
+
+    await sendMessage(env, chatId, `📝 *Transcribed:* "${transcribedText}"`);
+
+    // 4. Check for URLs in transcription → auto intel review
+    const urlMatches = transcribedText.match(INTEL_URL_PATTERN);
+    if (urlMatches && urlMatches.length > 0) {
+      await handleIntelReview(chatId, urlMatches, transcribedText, env);
+      return;
+    }
+
+    // 5. Route as a command if it starts with a slash word, else as research task
+    const cleaned = transcribedText.trim();
+    if (cleaned.startsWith("/") || cleaned.toLowerCase().startsWith("slash ")) {
+      // Voice said a command — treat as text command
+      const cmdText = cleaned.startsWith("/") ? cleaned : cleaned.replace(/^slash\s+/i, "/");
+      await handleCommand(chatId, cmdText, env);
+    } else {
+      // Natural language voice note → route as research task to Nation Supervisor
+      await handleNaturalLanguageTask(chatId, cleaned, env);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await sendMessage(env, chatId, `❌ Voice processing error: ${msg}`);
+  }
+}
+
+// ── Natural language routing (voice notes / plain messages) ──────────────────
+
+async function handleNaturalLanguageTask(chatId: number, text: string, env: Env): Promise<void> {
+  // Route to Nation Supervisor as a research task — it will classify and delegate
+  const taskId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  await run(env.DB,
+    `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, spawn_depth, created_at, updated_at)
+     VALUES (?, 'research', 'pending', 'agent-nation-supervisor', 'team-research', ?, 0, ?, ?)`,
+    [taskId, JSON.stringify({ summary: text, source: "telegram_voice" }), now, now],
+  );
+
+  await sendMessage(env, chatId,
+    `✅ *Routing to Nation Supervisor*\n\n` +
+    `"${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"\n\n` +
+    `Task ID: \`${taskId}\`\nCheck with: \`/status ${taskId}\``
+  );
+}
+
+// ── Intel review: auto-triggered when URLs are detected ──────────────────────
+
+async function handleIntelReview(
+  chatId: number,
+  urls: string[],
+  fullText: string,
+  env: Env,
+): Promise<void> {
+  for (const url of urls.slice(0, 3)) { // max 3 URLs per message
+    const taskId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    // Parse GitHub owner/repo from URL if present
+    const githubMatch = url.match(/github\.com\/([^/]+)\/([^/?\s]+)/);
+    const repoContext = githubMatch
+      ? `owner: ${githubMatch[1]}, repo: ${githubMatch[2]}`
+      : `url: ${url}`;
+
+    await run(env.DB,
+      `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, spawn_depth, created_at, updated_at)
+       VALUES (?, 'intel_review', 'pending', 'agent-intel-lead', 'team-intel', ?, 0, ?, ?)`,
+      [
+        taskId,
+        JSON.stringify({
+          summary: url,
+          details: `Submitted via Telegram. Context: "${fullText.slice(0, 200)}". Repo: ${repoContext}`,
+          source: "telegram_intel",
+          url,
+          ...(githubMatch ? { owner: githubMatch[1], repo: githubMatch[2] } : {}),
+        }),
+        now, now,
+      ],
+    );
+
+    await sendMessage(env, chatId,
+      `🔍 *Intel Review started*\n\n` +
+      `URL: \`${url}\`\n` +
+      `Task: \`${taskId}\`\n` +
+      `Agent: Intel Lead → Repo Researcher + Value Assessor\n\n` +
+      `_Will produce: Safety · Value · Recommendation_\n` +
+      `Check with: \`/status ${taskId}\``
+    );
+  }
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface TelegramUpdate {
   message?: {
     message_id: number;
     text?: string;
+    voice?: { file_id: string; duration: number };
+    audio?: { file_id: string; duration: number };
     chat: { id: number };
     from?: { id: number; username?: string };
   };

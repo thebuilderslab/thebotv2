@@ -67,6 +67,9 @@ export async function executeTool(
       // Legacy Brave Search path — kept as fallback
       return await executeWebSearch(tool.endpoint, toolInput, searchConfig.braveApiKey);
     }
+    if (tool.kind === "http_get") {
+      return await executeHttpGet(tool.endpoint, toolInput);
+    }
     // Default: http_api — POST JSON body
     return await executeHttpApi(tool.endpoint, toolInput);
   } catch (err: unknown) {
@@ -128,6 +131,59 @@ async function executeHttpApi(
 
   let parsed: unknown = text;
   try { parsed = JSON.parse(text); } catch { /* return raw text */ }
+  return { ok: true, result: parsed };
+}
+
+// ── http_get: GitHub API + OSSInsight + generic GET ──────────────────────────
+// endpoint is the base URL; path params from input are appended.
+// For github_repo_info: endpoint=https://api.github.com/repos, input={owner,repo}
+// For ossinsight_repo:  endpoint=https://api.ossinsight.io/v1/repos, input={owner,repo}
+
+async function executeHttpGet(
+  endpoint: string,
+  input: Record<string, unknown>,
+): Promise<ToolCallResult> {
+  const owner = String(input["owner"] ?? "");
+  const repo  = String(input["repo"]  ?? "");
+
+  // Build URL: append /owner/repo if present, else use endpoint as-is
+  let url = endpoint.replace(/\/$/, "");
+  if (owner && repo) url = `${url}/${owner}/${repo}`;
+
+  const res = await fetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "User-Agent": "bot-nation-intel/1.0",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+
+  const text = await res.text();
+  if (!res.ok) return { ok: false, error: `GET ${url} → HTTP ${res.status}: ${text.slice(0, 200)}` };
+
+  let parsed: unknown = text;
+  try { parsed = JSON.parse(text); } catch { /* return raw */ }
+
+  // For GitHub: extract the most useful fields to keep context short
+  if (url.includes("api.github.com")) {
+    const d = parsed as Record<string, unknown>;
+    parsed = {
+      name:          d["full_name"],
+      description:   d["description"],
+      stars:         d["stargazers_count"],
+      forks:         d["forks_count"],
+      language:      d["language"],
+      license:       (d["license"] as Record<string, unknown> | null)?.["spdx_id"] ?? "none",
+      open_issues:   d["open_issues_count"],
+      last_push:     d["pushed_at"],
+      created_at:    d["created_at"],
+      topics:        d["topics"],
+      archived:      d["archived"],
+      homepage:      d["homepage"],
+      url:           d["html_url"],
+    };
+  }
+
   return { ok: true, result: parsed };
 }
 

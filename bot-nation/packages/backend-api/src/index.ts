@@ -25,6 +25,7 @@ export interface Env {
   BRAVE_SEARCH_API_KEY?: string;
   SEARXNG_BASE_URL?: string;
   AGENT_ACTOR: DurableObjectNamespace;
+  AI: Ai; // Cloudflare Workers AI — used for Whisper voice transcription
   OPENROUTER_API_KEY?: string;
   GITHUB_TOKEN?: string;
 }

@@ -32,6 +32,7 @@ interface ActorEnv {
   SEARXNG_BASE_URL?: string;
   AGENT_ACTOR: DurableObjectNamespace;
   OPENROUTER_API_KEY?: string;
+  AI?: Ai;
 }
 
 interface QueuedTask {
