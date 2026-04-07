@@ -99,7 +99,8 @@ async function handleCommand(chatId: number, text: string, env: Env): Promise<vo
   if (!text.startsWith("/")) return;
 
   const parts = text.split(/\s+/);
-  const cmd = parts[0] ?? "";
+  // Strip @botname suffix from commands (e.g. /help@MyBot → /help)
+  const cmd = (parts[0] ?? "").replace(/@\S+$/, "");
   const args = parts.slice(1);
 
   switch (cmd.toLowerCase()) {
