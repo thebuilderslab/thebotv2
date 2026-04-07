@@ -52,7 +52,7 @@ const INTEL_URL_PATTERN = /https?:\/\/(github\.com|gitlab\.com|bitbucket\.org|in
 
 // ── Main webhook handler ──────────────────────────────────────────────────────
 
-telegramRouter.post("/telegram", async (req, env: Env) => {
+telegramRouter.post("/telegram/webhook", async (req, env: Env) => {
   const update = (await req.json()) as TelegramUpdate;
 
   if (update.message) {
