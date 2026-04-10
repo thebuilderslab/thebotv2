@@ -16,6 +16,7 @@ import { graphsRouter } from "./routes/graphs";
 import { nationRouter } from "./routes/nation";
 import { supervisorRouter } from "./routes/supervisor-reminders";
 import { retellRouter } from "./routes/retell";
+import { baileyRouter } from "./routes/bailey";
 import { scheduledHandler } from "./scheduled";
 export { AgentActor } from "./actors/AgentActor";
 
@@ -58,6 +59,7 @@ router.all("/api/nation/*", nationRouter.fetch);
 router.all("/telegram/*", telegramRouter.fetch);
 router.all("/api/supervisor/*", supervisorRouter.fetch);
 router.all("/api/retell/*", retellRouter.fetch);
+router.all("/api/bailey/*", baileyRouter.fetch);
 
 export default {
   fetch: router.fetch,
