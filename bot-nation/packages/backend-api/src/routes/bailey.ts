@@ -5,7 +5,7 @@
 
 import { AutoRouter, type IRequest } from "itty-router";
 import type { Env } from "../index";
-import { run, query } from "../db/schema";
+import { run, query, queryOne } from "../db/schema";
 
 export const baileyRouter = AutoRouter<IRequest, [Env, ExecutionContext]>();
 
@@ -200,4 +200,103 @@ baileyRouter.get("/api/bailey/health", async () => {
     methods: ["POST"],
     accepts: ["multipart/form-data (CSV file)", "application/json with {csv: '...'}"],
   });
+});
+
+/**
+ * Execute propstream_lead_score task
+ */
+baileyRouter.post("/api/bailey/execute/:id", async (req, env: Env) => {
+  const taskId = req.params["id"];
+  if (!taskId) return new Response("Bad Request", { status: 400 });
+
+  try {
+    const { scoreLead } = await import("../services/bailey-scorer");
+
+    // Get task
+    const task = await queryOne<{
+      id: string;
+      kind: string;
+      status: string;
+      input: string;
+      assigned_agent_id: string;
+      team_id: string;
+    }>(
+      env.DB,
+      `SELECT id, kind, status, input, assigned_agent_id, team_id FROM tasks WHERE id = ?`,
+      [taskId],
+    );
+
+    if (!task) return new Response("Task not found", { status: 404 });
+    if (task.kind !== "propstream_lead_score") {
+      return new Response("Task is not a propstream_lead_score", { status: 400 });
+    }
+
+    // Parse input
+    const input = JSON.parse(task.input);
+
+    // Score the lead
+    const score = await scoreLead(input, env.ANTHROPIC_API_KEY);
+
+    // Update task with output
+    const now = new Date().toISOString();
+    const output = {
+      score: score.score,
+      disposition: score.disposition,
+      reasoning: score.reasoning,
+      call_angle: score.call_angle,
+      script_variables: score.script_variables,
+      confidence: score.confidence,
+    };
+
+    await run(env.DB,
+      `UPDATE tasks SET status = 'completed', output = ?, updated_at = ? WHERE id = ?`,
+      [JSON.stringify(output), now, taskId],
+    );
+
+    // Send Telegram notification
+    if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
+      const emoji = {
+        hot: "🔥",
+        warm: "🟠",
+        cold: "❄️",
+      }[score.disposition] || "❓";
+
+      const message = `${emoji} <b>${score.disposition.toUpperCase()}</b> — ${score.owner_name}\n\n` +
+                      `<code>Score: ${score.score}/12 | Confidence: ${score.confidence}%</code>\n\n` +
+                      `📍 ${score.property_address}\n` +
+                      `💡 <i>${score.call_angle}</i>\n\n` +
+                      `✅ Scored by agent-bailey-scorer`;
+
+      try {
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: env.TELEGRAM_CHAT_ID,
+            text: message,
+            parse_mode: "HTML",
+          }),
+        });
+      } catch (err) {
+        console.error(`[Bailey Execute] Telegram notification failed: ${err}`);
+      }
+    }
+
+    return Response.json({
+      status: "ok",
+      task_id: taskId,
+      result: {
+        disposition: score.disposition,
+        score: score.score,
+        confidence: score.confidence,
+        reasoning: score.reasoning,
+      },
+    });
+  } catch (err) {
+    console.error(`[Bailey Execute] Error: ${err}`);
+    return Response.json({
+      status: "error",
+      error: String(err),
+    }, { status: 500 });
+  }
 });
