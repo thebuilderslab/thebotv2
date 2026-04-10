@@ -44,50 +44,50 @@ const KIND_MODEL_MAP: Record<string, ModelConfig> = {
   research: {
     model: MODELS.KIMI_K2_5,
     fallback: MODELS.AUTO,
-    maxTokens: 4096,
+    maxTokens: 1024,
     temperature: 0.7,
   },
   deep_research: {
     model: MODELS.KIMI_K2_5,
     fallback: MODELS.GEMINI_PRO,
-    maxTokens: 8192,
+    maxTokens: 1024,
     temperature: 0.5,
   },
   content_generation: {
     model: MODELS.GEMINI_FLASH,
     fallback: MODELS.KIMI_K2_5,
-    maxTokens: 2048,
+    maxTokens: 1024,
     temperature: 0.9,
   },
   code_change: {
     model: MODELS.GLM_5,
     fallback: MODELS.QWEN_397B,
-    maxTokens: 4096,
+    maxTokens: 1024,
     temperature: 0.2,
   },
   config_change: {
     model: MODELS.QWEN_397B,
     fallback: MODELS.GLM_5,
-    maxTokens: 2048,
+    maxTokens: 1024,
     temperature: 0.1,
   },
   improvement_proposal: {
     model: MODELS.GLM_5,
     fallback: MODELS.KIMI_K2_5,
-    maxTokens: 4096,
+    maxTokens: 1024,
     temperature: 0.4,
   },
   wallet_simulation: {
     model: MODELS.QWEN_397B,
     fallback: MODELS.AUTO,
-    maxTokens: 2048,
+    maxTokens: 1024,
     temperature: 0.1,
   },
   // ── projecT87 DeFi task kinds ────────────────────────────────────────────────
   defi_plan: {
     model: MODELS.QWEN_397B,       // strong reasoning for DAG planning
     fallback: MODELS.GLM_5,
-    maxTokens: 4096,
+    maxTokens: 1024,
     temperature: 0.2,
   },
   defi_risk_check: {
@@ -105,20 +105,20 @@ const KIND_MODEL_MAP: Record<string, ModelConfig> = {
   defi_report: {
     model: MODELS.KIMI_K2_5,       // long-context PnL + performance reports
     fallback: MODELS.GEMINI_FLASH,
-    maxTokens: 4096,
+    maxTokens: 1024,
     temperature: 0.3,
   },
   // ── Agency sales task kinds ──────────────────────────────────────────────────
   market_research: {
     model: MODELS.KIMI_K2_5,       // deep ICP / market analysis
     fallback: MODELS.AUTO,
-    maxTokens: 4096,
+    maxTokens: 1024,
     temperature: 0.6,
   },
   campaign_generation: {
     model: MODELS.GEMINI_FLASH,    // fast multilingual content
     fallback: MODELS.KIMI_K2_5,
-    maxTokens: 2048,
+    maxTokens: 1024,
     temperature: 0.9,
   },
   lead_qualification: {
@@ -136,8 +136,48 @@ const KIND_MODEL_MAP: Record<string, ModelConfig> = {
   vision: {
     model: MODELS.GLM_5V_TURBO,
     fallback: MODELS.KIMI_K2_5,
-    maxTokens: 2048,
+    maxTokens: 1024,
     temperature: 0.5,
+  },
+
+  // ── Finance reporting ────────────────────────────────────────────────────
+  cost_report: {
+    model: MODELS.QWEN_397B,       // analytical reasoning on token usage + trends
+    fallback: MODELS.GEMINI_FLASH,
+    maxTokens: 2048,
+    temperature: 0.1,
+  },
+
+  // ── Bailey Group real estate task kinds ──────────────────────────────────
+  propstream_lead_score: {
+    model: MODELS.GLM_5,           // structured scoring from PropStream fields
+    fallback: MODELS.QWEN_397B,
+    maxTokens: 3000,
+    temperature: 0.2,
+  },
+  seller_outbound_call: {
+    model: MODELS.KIMI_K2_5,       // long-context for transcript analysis + Niamo voice
+    fallback: MODELS.GLM_5,
+    maxTokens: 4000,
+    temperature: 0.6,
+  },
+  call_transcript_processor: {
+    model: MODELS.GLM_5,           // structured extraction from call
+    fallback: MODELS.QWEN_397B,
+    maxTokens: 2000,
+    temperature: 0.1,
+  },
+  schedule_property_tour: {
+    model: MODELS.GEMINI_FLASH,    // fast CRM + calendar task
+    fallback: MODELS.QWEN_397B,
+    maxTokens: 1000,
+    temperature: 0.2,
+  },
+  bailey_daily_report: {
+    model: MODELS.KIMI_K2_5,       // summary + analytics on calls + tours
+    fallback: MODELS.GEMINI_FLASH,
+    maxTokens: 2500,
+    temperature: 0.3,
   },
 };
 
@@ -157,7 +197,7 @@ const DOMAIN_MODEL_OVERRIDE: Record<string, Partial<ModelConfig>> = {
 const DEFAULT_CONFIG: ModelConfig = {
   model: MODELS.KIMI_K2_5,
   fallback: MODELS.AUTO,
-  maxTokens: 2048,
+  maxTokens: 1024,
   temperature: 0.7,
 };
 

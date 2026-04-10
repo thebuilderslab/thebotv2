@@ -31,6 +31,8 @@ export interface Env {
   AI: Ai; // Cloudflare Workers AI — used for Whisper voice transcription
   OPENROUTER_API_KEY?: string;
   GITHUB_TOKEN?: string;
+  RETELL_API_KEY?: string;
+  RETELL_AGENT_ID?: string;
 }
 
 const { preflight, corsify } = cors({ origin: "*" });

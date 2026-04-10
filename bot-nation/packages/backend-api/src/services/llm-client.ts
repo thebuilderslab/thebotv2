@@ -110,7 +110,7 @@ async function openrouterComplete(
 
   const requestBody: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
     model: params.model,
-    max_tokens: params.maxTokens ?? 2048,
+    max_tokens: params.maxTokens ?? 1024,
     temperature: params.temperature ?? 0.7,
     messages: [
       { role: "system", content: params.systemPrompt },
@@ -176,7 +176,7 @@ async function anthropicComplete(
 
   const response = await anthropic.messages.create({
     model: "claude-haiku-4-5",
-    max_tokens: params.maxTokens ?? 2048,
+    max_tokens: params.maxTokens ?? 1024,
     system: params.systemPrompt,
     messages: anthropicMessages,
     ...(anthropicTools && anthropicTools.length > 0 ? { tools: anthropicTools } : {}),
@@ -221,7 +221,7 @@ export async function* llmStream(params: {
 
   const stream = await client.chat.completions.create({
     model: params.model,
-    max_tokens: params.maxTokens ?? 2048,
+    max_tokens: params.maxTokens ?? 1024,
     temperature: params.temperature ?? 0.7,
     stream: true,
     messages: [

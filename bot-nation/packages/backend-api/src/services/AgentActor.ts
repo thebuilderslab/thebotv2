@@ -3,11 +3,11 @@
  *
  * One persistent DO instance per agent (keyed by agent_id).
  * Responsibilities:
- *   - Maintains a task queue across invocations
- *   - Executes tasks via OpenRouter (model-routed) or Anthropic fallback
- *   - Streams token chunks to connected WebSocket clients
- *   - Supports agent-to-agent messaging via DO stub calls
- *   - Uses alarms for immediate dispatch + 15-min execution timeout
+ * - Maintains a task queue across invocations
+ * - Executes tasks via OpenRouter (model-routed) or Anthropic fallback
+ * - Streams token chunks to connected WebSocket clients
+ * - Supports agent-to-agent messaging via DO stub calls
+ * - Uses alarms for immediate dispatch + 15-min execution timeout
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -52,9 +52,6 @@ interface TaskRow {
   telegram_chat_id: number | null;
   telegram_message_id: number | null;
   started_at: string | null;
-  retry_count: number;
-  max_retries: number;
-  last_graph_node_id: string | null;
 }
 
 // ── ETA lookup by task kind (seconds) ────────────────────────────────────────
@@ -225,74 +222,44 @@ export class AgentActor implements DurableObject {
   }
 
   private async drainQueue(): Promise<void> {
-    // Phase 1 Stability: Stale-lock recovery (30s re-alarm, not 5min)
-    // If alarm fires while isRunning=true, the previous task timed out or
-    // the DO was killed mid-execution. Retry the task (up to 3 times) with backoff.
+    // Stale-lock recovery: if alarm fires while isRunning=true, the previous task
+    // timed out or the DO was killed mid-execution. Reset the lock so the next
+    // queued task can proceed. The cron timeout checker handles marking the
+    // stuck task as failed in D1.
     if (this.isRunning) {
-      console.warn("[AgentActor] stale isRunning lock detected — retrying stuck task");
+      console.warn("[AgentActor] stale isRunning lock detected — resetting");
       this.isRunning = false;
       await this.state.storage.put("isRunning", false);
-
-      // The stuck item should still be in memory or queued. Don't process it again
-      // if the queue is already moving. Just reset the lock and let the alarm
-      // fire again in 30s if still stuck.
-      // Schedule recovery re-alarm: 30s (not 5min)
-      await this.state.storage.setAlarm(Date.now() + 30 * 1000);
-      return;
     }
-
     if (this.taskQueue.length === 0) return;
 
     this.isRunning = true;
     await this.state.storage.put("isRunning", true);
 
     const item = this.taskQueue.shift()!;
+    console.log(`[AgentActor] DEQUEUE task ${item.taskId} session=${item.sessionId} remainingQueue=${this.taskQueue.length}`);
     await this.state.storage.put("taskQueue", this.taskQueue);
 
-    // 15-minute execution timeout alarm (absolute deadline)
+    // 15-minute execution timeout alarm
     await this.state.storage.setAlarm(Date.now() + 15 * 60 * 1000);
 
     try {
+      console.log(`[AgentActor] EXECUTE task ${item.taskId} session=${item.sessionId}`);
       await this.executeTask(item.taskId, item.sessionId);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? (err.stack ?? "") : "";
-      console.error(`[AgentActor] task ${item.taskId} FAILED (attempt): ${msg}`);
-
-      // Load task to check retry count
-      const task = await queryOne<TaskRow>(
-        this.env.DB,
-        "SELECT retry_count, max_retries FROM tasks WHERE id = ?",
-        [item.taskId],
-      );
-
-      const retryCount = task?.retry_count ?? 0;
-      const maxRetries = task?.max_retries ?? 3;
-
-      if (retryCount < maxRetries) {
-        // Re-queue with backoff: retry_count incremented
-        console.warn(`[AgentActor] task ${item.taskId} will retry (${retryCount + 1}/${maxRetries})`);
-        const now = new Date().toISOString();
-        await run(
-          this.env.DB,
-          "UPDATE tasks SET retry_count=?, updated_at=? WHERE id=?",
-          [retryCount + 1, now, item.taskId],
-        );
-        // Re-queue at front of queue (higher priority)
-        this.taskQueue.unshift(item);
-        await this.state.storage.put("taskQueue", this.taskQueue);
-      } else {
-        // Max retries exceeded — mark as failed
-        console.error(`[AgentActor] task ${item.taskId} FAILED after ${maxRetries} retries`);
-        const now = new Date().toISOString();
-        await run(this.env.DB, "UPDATE tasks SET status='failed', updated_at=? WHERE id=?", [now, item.taskId]);
-        await this.updateSession(item.sessionId, "failed", now);
-        try {
-          await this.emitEvent(item.taskId, "task.do_error", { error: msg, stack: stack.slice(0, 500) }, now);
-        } catch { /* swallow */ }
-        this.broadcast(JSON.stringify({ type: "error", taskId: item.taskId, message: msg }));
-      }
+      console.error(`[AgentActor] FAILED task ${item.taskId}: ${msg}`, stack);
+      const now = new Date().toISOString();
+      await run(this.env.DB, "UPDATE tasks SET status='failed', updated_at=? WHERE id=?", [now, item.taskId]);
+      await this.updateSession(item.sessionId, "failed", now);
+      // Emit failure event so it shows up in /events and UI
+      try {
+        await this.emitEvent(item.taskId, "task.do_error", { error: msg, stack: stack.slice(0, 500) }, now);
+      } catch { /* swallow — DB might be the cause */ }
+      this.broadcast(JSON.stringify({ type: "error", taskId: item.taskId, message: msg }));
     } finally {
+      console.log(`[AgentActor] FINISH task ${item.taskId} queueRemaining=${this.taskQueue.length}`);
       this.isRunning = false;
       await this.state.storage.put("isRunning", false);
       await this.state.storage.deleteAlarm();
@@ -312,10 +279,11 @@ export class AgentActor implements DurableObject {
     // Load task
     const task = await queryOne<TaskRow>(
       this.env.DB,
-      "SELECT id, kind, input, output, parent_task_id, spawn_depth, telegram_chat_id, telegram_message_id, started_at, retry_count, max_retries, last_graph_node_id FROM tasks WHERE id = ?",
+      "SELECT id, kind, input, output, parent_task_id, spawn_depth, telegram_chat_id, telegram_message_id, started_at FROM tasks WHERE id = ?",
       [taskId],
     );
     if (!task) throw new Error(`Task ${taskId} not found`);
+    console.log(`[AgentActor] START task ${taskId} kind=${task.kind} parent=${task.parent_task_id ?? "none"} telegramChat=${task.telegram_chat_id ?? "none"}`);
 
     // Load agent (derived from DO name = agent_id)
     const agentId = this.state.id.name;
@@ -394,6 +362,7 @@ export class AgentActor implements DurableObject {
 
     // Resolve model for this task
     const modelConfig = resolveModel(task.kind, agent.domain);
+    console.log(`[AgentActor] MODEL task ${taskId} model=${modelConfig.model} fallback=${modelConfig.fallback} maxTokens=${modelConfig.maxTokens} temperature=${modelConfig.temperature}`);
     this.broadcast(JSON.stringify({ type: "model_selected", model: modelConfig.model, taskKind: task.kind }));
 
     let promptTokens = 0;
@@ -402,14 +371,7 @@ export class AgentActor implements DurableObject {
     if (graphRow) {
       // ── Graph traversal ────────────────────────────────────────────────────
       const graph = JSON.parse(graphRow.definition) as GraphDefinition;
-      // Phase 1 Stability: Resume from checkpoint if retrying
-      const resumeFromNodeId = task.retry_count > 0 && task.last_graph_node_id
-        ? task.last_graph_node_id
-        : null;
-      if (resumeFromNodeId) {
-        console.log(`[AgentActor] Resuming task ${taskId} from checkpoint: ${resumeFromNodeId}`);
-      }
-      const graphResult = await this.traverseGraph(graph, task, agent, notesText, childResultsText, taskId, sessionId, graphRow.id, modelConfig, executionStartMs, etaSeconds, resumeFromNodeId);
+      const graphResult = await this.traverseGraph(graph, task, agent, notesText, childResultsText, taskId, sessionId, graphRow.id, modelConfig, executionStartMs, etaSeconds);
       finalText = graphResult.text;
       promptTokens = graphResult.promptTokens;
       completionTokens = graphResult.completionTokens;
@@ -468,6 +430,7 @@ export class AgentActor implements DurableObject {
       "UPDATE tasks SET status='completed', output=?, session_id=?, updated_at=? WHERE id=?",
       [outputJson, sessionId, now, taskId],
     );
+    console.log(`[AgentActor] COMPLETE task ${taskId} artifact=${artifactId ?? "none"} promptTokens=${promptTokens} completionTokens=${completionTokens}`);
 
     await this.emitEvent(taskId, "session.completed", { sessionId, artifactId }, now);
     await this.updateSession(sessionId, "completed", now);
@@ -492,19 +455,9 @@ export class AgentActor implements DurableObject {
     modelConfig: { model: string; fallback: string; maxTokens: number; temperature: number },
     executionStartMs = Date.now(),
     etaSeconds = 60,
-    resumeFromNodeId: string | null = null,
   ): Promise<{ text: string; promptTokens: number; completionTokens: number }> {
     const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
-    // Phase 1 Stability: Resume from checkpoint by finding next node after resume point
     let currentNodeId = graph.startNode;
-    if (resumeFromNodeId) {
-      const resumeNode = nodeMap.get(resumeFromNodeId);
-      if (resumeNode) {
-        const edge = graph.edges.find((e) => e.from === resumeFromNodeId);
-        currentNodeId = edge?.to ?? null;
-        console.log(`[AgentActor] Skipped to node ${currentNodeId} (after checkpoint ${resumeFromNodeId})`);
-      }
-    }
     // Original task summary — always available for {{task}} substitution
     let taskInput: { summary?: string; details?: string } = {};
     try { taskInput = JSON.parse(task.input) as typeof taskInput; } catch { /* ignore */ }
@@ -513,16 +466,12 @@ export class AgentActor implements DurableObject {
     let lastText = "";
 
     const systemPrompt = this.buildSystemPrompt(agent, notesText);
-    // Graph LLM nodes do NOT receive tools — tool invocation uses dedicated tool_call nodes.
-    // Passing tools to streaming LLM nodes causes agentic models (Kimi, GLM) to call tools
-    // mid-stream, which the streaming path cannot handle.
     const now = new Date().toISOString();
     let nodesExecuted = 0;
     let totalPromptTokens = 0;
     let totalCompletionTokens = 0;
 
     while (currentNodeId) {
-      // ── Guardrail 4: Graph node execution cap ──────────────────────────────
       if (!checkGraphNodeCap(nodesExecuted)) {
         console.warn(`[Guardrail] Graph node cap reached for task ${taskId} after ${nodesExecuted} nodes`);
         await this.emitEvent(taskId, "guardrail.graph_cap",
@@ -538,12 +487,12 @@ export class AgentActor implements DurableObject {
       let nodeOk = true;
 
       this.broadcast(JSON.stringify({ type: "node_start", nodeId: node.id, label: node.label ?? node.id }));
+      console.log(`[AgentActor] NODE_START task ${taskId} node=${node.id} kind=${node.kind} label=${node.label ?? node.id}`);
 
       if (node.kind === "llm_call") {
         const prompt = (node.prompt ?? "Continue: {{prev}}")
           .replace("{{prev}}", prevOutput)
           .replace("{{task}}", taskSummary);
-        // Allow per-node model override (e.g. Gemini Flash for classify nodes)
         const nodeModelConfig = node.model
           ? { ...modelConfig, model: node.model }
           : modelConfig;
@@ -567,14 +516,8 @@ export class AgentActor implements DurableObject {
         sessionId, graphId, nodeId: node.id, ok: nodeOk,
       }, now);
 
-      // Graph node checkpointing: save progress so we can resume after DO reset
-      await run(this.env.DB,
-        "UPDATE tasks SET last_graph_node_id=? WHERE id=?",
-        [node.id, taskId],
-      );
-
-      // Send Telegram progress update after each node
       const elapsedSec = Math.round((Date.now() - executionStartMs) / 1000);
+      console.log(`[AgentActor] NODE_DONE task ${taskId} node=${node.id} ok=${nodeOk}`);
       const totalNodes = graph.nodes.filter((n) => n.kind !== "end").length;
       await this.editTelegramProgress(task, nodesExecuted, totalNodes, elapsedSec, etaSeconds, node.label ?? node.id);
 
@@ -583,7 +526,6 @@ export class AgentActor implements DurableObject {
         if (e.condition === "always") return true;
         if (e.condition === "on_success") return nodeOk;
         if (e.condition === "on_failure") return !nodeOk;
-        // Content-based branch: "contains:KEYWORD" — matches if prevOutput includes KEYWORD
         if (e.condition.startsWith("contains:")) {
           const keyword = e.condition.slice("contains:".length);
           return nodeOutput.toUpperCase().includes(keyword.toUpperCase());
@@ -613,29 +555,12 @@ export class AgentActor implements DurableObject {
     try { taskInput = JSON.parse(task.input) as typeof taskInput; } catch { /* ignore */ }
 
     const systemPrompt = this.buildSystemPrompt(agent, notesText);
- const userMessage = [
-  childResultsText ? `[Sub-task results]\n${childResultsText}\n\n[Task]` : "",
-  taskInput.summary ?? "",
-  taskInput.details ? `\n\nDetails: ${taskInput.details}` : "",
-  childResultsText ? "\n\nSynthesize the sub-task results into a final structured response." : "",
-  "\n\nYou must respond ONLY with a valid JSON object in this exact structure (no extra text, no Markdown):",
-  "{",
-  '  "executiveSummary": {',
-  '    "routing": "Classified as research and delegated to team-research (agent-research-lead).",',
-  '    "priority": "Low — straightforward factual lookup with no time sensitivity.",',
-  '    "status": "Complete — concise factual result or outcome.",',
-  '    "risks": "None — unless ambiguity, sensitivity, or uncertainty exists.",',
-  '    "action": "No further work required; task closed unless follow-up is needed."',
-  "  },",
-  '  "fullReport": "Long-form explanation here..."',
-  "}",
-  "\nRules:",
-  "- Keep the exact same keys and structure.",
-  "- Change only the string values so they match the actual task result.",
-  "- Be concise and professional.",
-  "- Do not add extra keys.",
-  "- Do not wrap the JSON in code fences.",
-].join("").trim();
+    const userMessage = [
+      childResultsText ? `[Sub-task results]\n${childResultsText}\n\n[Task]` : "",
+      taskInput.summary ?? "",
+      taskInput.details ? `\n\nDetails: ${taskInput.details}` : "",
+      childResultsText ? "\n\nSynthesize the sub-task results into a final structured response." : "",
+    ].join("").trim();
 
     const toolRows = await query<ToolRow>(
       this.env.DB,
@@ -651,7 +576,6 @@ export class AgentActor implements DurableObject {
     let totalPromptTokens = 0;
     let totalCompletionTokens = 0;
 
-    // Use OpenRouter if key available, else fall back to Anthropic
     const useOpenRouter = !!this.env.OPENROUTER_API_KEY;
 
     if (useOpenRouter) {
@@ -664,9 +588,10 @@ export class AgentActor implements DurableObject {
         },
       });
 
-      // ── Guardrail 5: Loop iteration cap ─────────────────────────────────────
       while (iterations < MAX_LOOP_ITERATIONS) {
+        console.log(`[AgentActor] LOOP task ${taskId} iteration=${iterations + 1} model=${modelConfig.model} maxTokens=${modelConfig.maxTokens}`);
         iterations++;
+        console.log(`[AgentActor] LLM_START task ${taskId} provider=openrouter model=${modelConfig.model} maxTokens=${modelConfig.maxTokens}`);
         const response = await client.chat.completions.create({
           model: modelConfig.model,
           max_tokens: modelConfig.maxTokens,
@@ -680,6 +605,7 @@ export class AgentActor implements DurableObject {
         const stopReason = choice?.finish_reason;
         totalPromptTokens += response.usage?.prompt_tokens ?? 0;
         totalCompletionTokens += response.usage?.completion_tokens ?? 0;
+        console.log(`[AgentActor] LLM_DONE task ${taskId} provider=openrouter promptTokens=${response.usage?.prompt_tokens ?? 0} completionTokens=${response.usage?.completion_tokens ?? 0} stopReason=${stopReason ?? "unknown"}`);
 
         if (stopReason === "stop") {
           finalText = msg?.content ?? "";
@@ -706,14 +632,14 @@ export class AgentActor implements DurableObject {
         break;
       }
     } else {
-      // Anthropic fallback
       const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
       const anthropicTools = this.buildAnthropicTools(toolRows);
       const anthropicMessages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
 
-      // ── Guardrail 5: Loop iteration cap (Anthropic fallback) ────────────────
       while (iterations < MAX_LOOP_ITERATIONS) {
+        console.log(`[AgentActor] LOOP task ${taskId} iteration=${iterations + 1} model=${modelConfig.model} maxTokens=${modelConfig.maxTokens}`);
         iterations++;
+        console.log(`[AgentActor] LLM_START task ${taskId} provider=anthropic model=claude-haiku-4-5 maxTokens=${modelConfig.maxTokens}`);
         const response = await anthropic.messages.create({
           model: "claude-haiku-4-5",
           max_tokens: modelConfig.maxTokens,
@@ -723,6 +649,7 @@ export class AgentActor implements DurableObject {
         });
         totalPromptTokens += response.usage.input_tokens;
         totalCompletionTokens += response.usage.output_tokens;
+        console.log(`[AgentActor] LLM_DONE task ${taskId} provider=anthropic promptTokens=${response.usage.input_tokens} completionTokens=${response.usage.output_tokens} stopReason=${response.stop_reason}`);
 
         if (response.stop_reason === "end_turn") {
           const block = response.content.find((b) => b.type === "text");
@@ -791,7 +718,6 @@ export class AgentActor implements DurableObject {
     if (!task.telegram_chat_id) return;
     if (!this.env.TELEGRAM_BOT_TOKEN) return;
 
-    // Edit the progress message to show done
     if (task.telegram_message_id) {
       await this.tgEdit(
         task.telegram_chat_id,
@@ -800,7 +726,6 @@ export class AgentActor implements DurableObject {
       );
     }
 
-    // Send a NEW message so the user gets a notification with the full result
     const trimmed = summary.slice(0, 3500) + (summary.length > 3500 ? "..." : "");
     const text =
       `✅ <b>${task.kind}</b> complete in ${elapsedSeconds}s\n` +
@@ -826,27 +751,23 @@ export class AgentActor implements DurableObject {
         body: JSON.stringify({ chat_id: chatId, message_id: messageId, text, parse_mode: "HTML" }),
         signal: AbortSignal.timeout(5_000),
       });
-    } catch { /* non-critical — ignore Telegram edit failures */ }
+    } catch { /* non-critical */ }
   }
 
   // ── Graph LLM call (non-streaming with 55s timeout) ──────────────────────
-  // Graph nodes use non-streaming to avoid hanging SSE connections.
-  // Tokens are broadcast to WS clients after the full response arrives.
-  // Returns text + token usage for cost tracking.
 
   private async streamingLlmCall(
     systemPrompt: string,
     userMessage: string,
-    _tools: OpenAI.Chat.ChatCompletionTool[],   // tools unused — graph nodes are pure text
+    _tools: OpenAI.Chat.ChatCompletionTool[],
     modelConfig: { model: string; maxTokens: number; temperature: number },
   ): Promise<{ text: string; promptTokens: number; completionTokens: number }> {
     this.broadcast(JSON.stringify({ type: "stream_start" }));
+    console.log(`[AgentActor] STREAM_START model=${modelConfig.model} maxTokens=${modelConfig.maxTokens}`);
     let fullText = "";
     let promptTokens = 0;
     let completionTokens = 0;
 
-    // 110s wall-clock timeout — Kimi K2.5 first-token latency can exceed 55s on loaded nodes.
-    // CPU idle time (network wait) does not count against DO's 30s CPU cap.
     const timeout = AbortSignal.timeout(110_000);
 
     if (this.env.OPENROUTER_API_KEY) {
@@ -859,6 +780,7 @@ export class AgentActor implements DurableObject {
         },
       });
 
+      console.log(`[AgentActor] STREAM_LLM_START provider=openrouter model=${modelConfig.model} maxTokens=${modelConfig.maxTokens}`);
       const response = await client.chat.completions.create(
         {
           model: modelConfig.model,
@@ -876,9 +798,10 @@ export class AgentActor implements DurableObject {
       fullText = response.choices[0]?.message?.content ?? "";
       promptTokens = response.usage?.prompt_tokens ?? 0;
       completionTokens = response.usage?.completion_tokens ?? 0;
+      console.log(`[AgentActor] STREAM_LLM_DONE provider=openrouter promptTokens=${promptTokens} completionTokens=${completionTokens}`);
     } else {
-      // Anthropic fallback
       const anthropic = new Anthropic({ apiKey: this.env.ANTHROPIC_API_KEY });
+      console.log(`[AgentActor] STREAM_LLM_START provider=anthropic model=claude-haiku-4-5 maxTokens=${modelConfig.maxTokens}`);
       const response = await anthropic.messages.create({
         model: "claude-haiku-4-5",
         max_tokens: modelConfig.maxTokens,
@@ -889,10 +812,11 @@ export class AgentActor implements DurableObject {
       fullText = block?.type === "text" ? block.text : "";
       promptTokens = response.usage.input_tokens;
       completionTokens = response.usage.output_tokens;
+      console.log(`[AgentActor] STREAM_LLM_DONE provider=anthropic promptTokens=${promptTokens} completionTokens=${completionTokens}`);
     }
 
-    // Broadcast full text as a single token event for WS clients
     if (fullText) this.broadcast(JSON.stringify({ type: "token", text: fullText }));
+    console.log(`[AgentActor] STREAM_END promptTokens=${promptTokens} completionTokens=${completionTokens}`);
     this.broadcast(JSON.stringify({ type: "stream_end", promptTokens, completionTokens }));
     return { text: fullText, promptTokens, completionTokens };
   }
@@ -908,8 +832,6 @@ export class AgentActor implements DurableObject {
   ): Promise<boolean> {
     try {
       const rawList = JSON.parse(spawnJson) as Array<{ kind: string; summary: string; details?: string }>;
-
-      // ── Guardrail 2 & 3: Spawn depth + count limit ────────────────────────
       const guard = guardSpawn(rawList, currentDepth);
       if (!guard.allowed) {
         console.warn(`[Guardrail] Spawn blocked for task ${taskId}: ${guard.reason}`);
@@ -928,7 +850,6 @@ export class AgentActor implements DurableObject {
       const childDepth = currentDepth + 1;
 
       for (const spawn of spawnList) {
-        // Sanitise spawned task summary before storing
         const { safe: safeSummary } = sanitiseInput(spawn.summary);
         const childId = crypto.randomUUID();
         await run(
@@ -983,20 +904,13 @@ export class AgentActor implements DurableObject {
       `You are ${agent.name}, a ${agent.role} agent in Bot Nation.`,
       agent.description ?? "",
       "",
-      "You MUST respond in this exact structure:",
-      "1) First line: a single-sentence DIRECT ANSWER to the user's request.",
-      "2) Then a short explanation with at most 5 bullet points or short paragraphs.",
-      "",
-      "Guidelines:",
-      "- Put the direct answer first, do NOT start with reasoning or disclaimers.",
-      "- Be concise and specific. Avoid long step-by-step internal reasoning.",
-      "- Only include details that are necessary for the user to act.",
-      "",
       "Your memory:",
       notesText,
       "",
+      "Complete the task given to you. Be concise and specific.",
+      "",
       "If you need to delegate to sub-tasks, output a SPAWN_TASKS block:",
-      '<SPAWN_TASKS>[{"kind":"research","summary":"..."}]</SPAWN_TASKS>',
+      "<SPAWN_TASKS>[{\"kind\":\"research\",\"summary\":\"...\"}]</SPAWN_TASKS>",
     ].join("\n").trim();
   }
 
