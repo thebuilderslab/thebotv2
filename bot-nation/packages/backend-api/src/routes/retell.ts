@@ -31,18 +31,26 @@ interface RetellCallCompleteEvent {
 }
 
 retellRouter.post("/api/retell/call-complete", async (req, env: Env) => {
-  const payload = (await req.json()) as RetellCallCompleteEvent;
+  try {
+    const payload = (await req.json()) as any;
 
-  const {
-    call_id,
-    phone_number,
-    owner_name,
-    call_duration,
-    transcript,
-    disposition,
-    extracted_data,
-    recording_url,
-  } = payload;
+    // Handle Retell webhook test (empty payload)
+    if (!payload.call_id) {
+      return Response.json({ status: "ok", webhook: "ready" });
+    }
+
+    const callData = payload as RetellCallCompleteEvent;
+
+    const {
+      call_id,
+      phone_number,
+      owner_name,
+      call_duration,
+      transcript,
+      disposition,
+      extracted_data,
+      recording_url,
+    } = callData;
 
   const now = new Date().toISOString();
   const callRecord = crypto.randomUUID();
@@ -151,7 +159,11 @@ retellRouter.post("/api/retell/call-complete", async (req, env: Env) => {
     }
   }
 
-  return Response.json({ status: "ok", saved: true, call_id });
+    return Response.json({ status: "ok", saved: true, call_id });
+  } catch (err) {
+    console.error(`[Retell Webhook] Error: ${err}`);
+    return Response.json({ status: "error", error: String(err) }, { status: 500 });
+  }
 });
 
 /**

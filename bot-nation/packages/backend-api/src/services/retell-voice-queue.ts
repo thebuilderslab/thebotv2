@@ -71,6 +71,7 @@ export async function queueRetellVoiceCall(
     const payloadToSend = {
       agent_id: agentId,
       phone_number: property.phone,
+      from_number: "+1-860-317-9682", // Bailey Group outbound number
       dynamic_variables: dynamicVariables,
       metadata: {
         task_id: taskId,
