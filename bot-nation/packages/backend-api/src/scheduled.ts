@@ -307,6 +307,40 @@ EXIT RULES for each open position: Close if mark hits $X.XX. Roll if mark hits $
     teamId: "team-finance",
   },
 
+  // 9:00pm ET Sunday (01:00 UTC Monday) — Weekly Telegram Quality Review
+  // agent-research-lead reviews the past week of messages and proposes routing improvements
+  "0 1 * * 1": {
+    kind: "research",
+    summary: "Weekly Telegram reply quality review",
+    details: `You are agent-research-lead. Every Sunday night you review the past week of Telegram conversation logs and identify ways to improve Bot Nation's replies.
+
+STEP 1 — LOAD MESSAGE DATA
+Call query_db with view "recent_messages" to see the most recent 20 in/out pairs.
+Call query_db with view "message_quality" to see quality scores by route type.
+Call query_db with view "recent_failures" to see any failed tasks from this week.
+
+STEP 2 — IDENTIFY PATTERNS
+For each route type (action / supervisor / intel_url / command):
+• What % of messages are going each route?
+• Are there messages that got routed wrong? (e.g. a finance question that went to supervisor instead of agent-finance-lead)
+• Are there recurring question types that have no dedicated handler?
+• Any messages where the bot reply was too long, wrong format, or missed the point?
+
+STEP 3 — GENERATE IMPROVEMENTS
+List the top 3 specific improvements with:
+• Problem: exactly what goes wrong
+• Fix: the exact code change or prompt change needed (be specific — mention file + line if possible)
+• Expected impact: how many messages per week would improve
+
+STEP 4 — STORE KEY FINDINGS
+Use the query_db "my_notes" view to check if you already have a "telegram_quality_issues" note.
+If improvements are found, store them: use agent memory (you can SPAWN_TASKS a note-writing subtask).
+
+Output your analysis in 5 bullet points max. No markdown tables.`,
+    agentId: "agent-research-lead",
+    teamId: "team-research",
+  },
+
   // 3:00pm ET weekdays (19:00 UTC) — Position Exit Monitor (pre-close check)
   // Fires at 3 PM so the user has 60 min to review + approve/reject before market close.
   // Pending orders expire in 90 min — giving until ~4:30 PM before they go stale.

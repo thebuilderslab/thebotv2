@@ -20,7 +20,7 @@ import type { ApprovalBrief } from "@bot-nation/core-domain";
 import { applyChangeForApproval } from "../services/change-apply";
 import { query, queryOne, run } from "../db/schema";
 import { sanitiseInput } from "../services/guardrails";
-import { handleMessage, formatTelegramResponse, logIncomingMessage, logOutgoingResponse } from "../services/nation-supervisor";
+import { handleMessage, formatTelegramResponse, logIncomingMessage, logOutgoingResponse, persistTelegramMessage } from "../services/nation-supervisor";
 import { generatePriceTargets, getStoredTargets, formatTargetsForTelegram } from "../services/price-target-service";
 import { executeOrder, loadPendingOrder, formatOrderForTelegram } from "../services/schwab-orders";
 
@@ -112,6 +112,9 @@ telegramRouter.post("/telegram/webhook", async (c) => {
       return c.json({ ok: true });
     }
 
+    // ── Log every inbound message (fire-and-forget — never blocks) ──────────────
+    void persistTelegramMessage(env.DB, "in", chatId, text, { userId });
+
     // ── URL detection — GitHub/GitLab/etc URLs go straight to intel-lead ────────
     // Bypass the classifier entirely so the agent gets a real task with tools,
     // not an inline LLM answer from nation-supervisor.
@@ -155,17 +158,18 @@ telegramRouter.post("/telegram/webhook", async (c) => {
           [taskId, kind, agentId, teamId, JSON.stringify({ summary: text, details: "" }), chatId, now, now],
         );
 
+        // Update the in-log with route info
+        void persistTelegramMessage(env.DB, "in", chatId, text, { userId, taskId, routeType: "action", agentId });
+
         // Send immediate acknowledgement
+        const ackText = `🔄 <b>On it</b> — routing to ${agentId}\n<code>${taskId}</code>`;
         await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: `🔄 <b>On it</b> — routing to ${agentId}\n<code>${taskId}</code>`,
-            parse_mode: "HTML",
-          }),
+          body: JSON.stringify({ chat_id: chatId, text: ackText, parse_mode: "HTML" }),
           signal: AbortSignal.timeout(5000),
         });
+        void persistTelegramMessage(env.DB, "out", chatId, ackText, { taskId, routeType: "action", agentId });
 
         // Emit event
         const eventId = crypto.randomUUID();
@@ -213,6 +217,7 @@ telegramRouter.post("/telegram/webhook", async (c) => {
       } else {
         console.log(`[Telegram] Message sent successfully to chat ${chatId}`);
         logOutgoingResponse(chatId, response);
+        void persistTelegramMessage(env.DB, "out", chatId, telegramMessage, { routeType: "supervisor" });
       }
 
       return c.json({ ok: true });
