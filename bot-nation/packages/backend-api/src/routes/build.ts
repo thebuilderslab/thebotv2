@@ -19,6 +19,66 @@ import { Hono } from "hono";
 import type { Env } from "../index";
 import { run, queryOne } from "../db/schema";
 
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// ── GitHub dispatch helper — exported so telegram.ts callback can call it ────
+
+export async function dispatchChangeToGitHub(
+  env: Env,
+  changeId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const row = await queryOne<{
+    id: string; files: string; commit_message: string;
+    task_id: string | null; chat_id: string | null;
+  }>(
+    env.DB,
+    "SELECT id, files, commit_message, task_id, chat_id FROM code_changes WHERE id = ?",
+    [changeId],
+  );
+
+  if (!row) return { ok: false, error: "Change not found" };
+
+  const githubToken = (env as unknown as Record<string, string>)["GITHUB_TOKEN"];
+  if (!githubToken) return { ok: false, error: "GITHUB_TOKEN not configured" };
+
+  const dispatchPayload = {
+    event_type: "bot-nation-deploy",
+    client_payload: {
+      change_id:      changeId,
+      task_id:        row.task_id ?? changeId,
+      chat_id:        row.chat_id ?? (env as unknown as Record<string, string>)["TELEGRAM_CHAT_ID"] ?? "",
+      commit_message: row.commit_message.slice(0, 200),
+    },
+  };
+
+  const ghResp = await fetch(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${githubToken}`,
+        "Accept":        "application/vnd.github+json",
+        "Content-Type":  "application/json",
+        "User-Agent":    "bot-nation-agent/1.0",
+      },
+      body: JSON.stringify(dispatchPayload),
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+
+  const now = new Date().toISOString();
+  if (!ghResp.ok) {
+    const errText = await ghResp.text();
+    await run(env.DB, "UPDATE code_changes SET status='failed', updated_at=? WHERE id=?", [now, changeId]);
+    return { ok: false, error: `GitHub dispatch failed ${ghResp.status}: ${errText.slice(0, 200)}` };
+  }
+
+  await run(env.DB, "UPDATE code_changes SET status='dispatched', updated_at=? WHERE id=?", [now, changeId]);
+  return { ok: true };
+}
+
 export const buildRouter = new Hono<{ Bindings: Env }>();
 
 const GITHUB_OWNER = "thebuilderslab";
@@ -48,17 +108,14 @@ function isPathAllowed(p: string): boolean {
 
 // ── POST /api/build/submit ────────────────────────────────────────────────────
 // Called by agent-build-lead (submit_code_change tool).
-// Stores change in D1, fires GitHub repository_dispatch.
+// Stores change in D1 as pending_approval, sends Telegram preview with
+// Approve/Cancel buttons.  Dispatch to GitHub only happens on ✅ Approve.
 
 buildRouter.post("/api/build/submit", async (c) => {
-  const githubToken = c.env.GITHUB_TOKEN;
-  if (!githubToken) {
-    return c.json({ error: "GITHUB_TOKEN not configured. Run: npx wrangler secret put GITHUB_TOKEN" }, 500);
-  }
-
   let body: {
     files?: Array<{ path: string; content: string }>;
     commit_message?: string;
+    change_summary?: string;   // agent-written plain-text description of what changed
     task_id?: string;
     chat_id?: string | number;
   };
@@ -90,68 +147,84 @@ buildRouter.post("/api/build/submit", async (c) => {
 
   const id  = crypto.randomUUID();
   const now = new Date().toISOString();
+  const chatId = body.chat_id ?? c.env.TELEGRAM_CHAT_ID ?? "";
 
-  // Store in D1
+  // Store in D1 as pending_approval (not dispatched yet — waits for operator ✅)
   await run(c.env.DB,
     `INSERT INTO code_changes (id, task_id, agent_id, files, commit_message, status, chat_id, created_at, updated_at)
-     VALUES (?, ?, 'agent-build-lead', ?, ?, 'pending', ?, ?, ?)`,
-    [
-      id,
-      body.task_id ?? null,
-      JSON.stringify(body.files),
-      body.commit_message,
-      body.chat_id ? String(body.chat_id) : null,
-      now, now,
-    ],
+     VALUES (?, ?, 'agent-build-lead', ?, ?, 'pending_approval', ?, ?, ?)`,
+    [id, body.task_id ?? null, JSON.stringify(body.files), body.commit_message,
+     chatId ? String(chatId) : null, now, now],
   );
 
-  // Dispatch to GitHub Actions
-  const dispatchPayload = {
-    event_type: "bot-nation-deploy",
-    client_payload: {
-      change_id:      id,
-      task_id:        body.task_id ?? id,
-      chat_id:        body.chat_id ?? c.env.TELEGRAM_CHAT_ID ?? "",
-      commit_message: body.commit_message.slice(0, 200),
-    },
-  };
+  // ── Send Telegram preview with Approve / Cancel buttons ──────────────────
+  if (c.env.TELEGRAM_BOT_TOKEN && chatId) {
+    const fileLines = body.files.map((f) => `  📄 <code>${escapeHtml(f.path)}</code>`).join("\n");
+    const firstFile  = body.files[0];
+    // Show first ~600 chars of the changed file — enough to judge the change
+    const snippet = escapeHtml(firstFile.content.slice(0, 600));
+    const truncated = firstFile.content.length > 600
+      ? `\n<i>… +${firstFile.content.length - 600} more chars</i>` : "";
 
-  const ghResp = await fetch(
-    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
-    {
+    const summaryLine = body.change_summary
+      ? `\n\n📝 <b>What changed:</b>\n${escapeHtml(body.change_summary)}`
+      : "";
+
+    const previewText =
+      `🔍 <b>Code change ready — review before deploying</b>\n\n` +
+      `<b>Commit:</b> <i>${escapeHtml(body.commit_message)}</i>\n\n` +
+      `<b>Files (${body.files.length}):</b>\n${fileLines}` +
+      summaryLine +
+      `\n\n<b>Preview (<code>${escapeHtml(firstFile.path)}</code>):</b>\n` +
+      `<pre>${snippet}</pre>${truncated}\n\n` +
+      `Tap ✅ to deploy or ❌ to cancel.`;
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: "✅ Deploy it", callback_data: `build_approve:${id}` },
+        { text: "❌ Cancel",    callback_data: `build_cancel:${id}` },
+      ]],
+    };
+
+    await fetch(`https://api.telegram.org/bot${c.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${githubToken}`,
-        "Accept":        "application/vnd.github+json",
-        "Content-Type":  "application/json",
-        "User-Agent":    "bot-nation-agent/1.0",
-      },
-      body: JSON.stringify(dispatchPayload),
-      signal: AbortSignal.timeout(10_000),
-    },
-  );
-
-  if (!ghResp.ok) {
-    const errText = await ghResp.text();
-    await run(c.env.DB,
-      "UPDATE code_changes SET status='failed', updated_at=? WHERE id=?",
-      [now, id],
-    );
-    return c.json({ error: `GitHub dispatch failed ${ghResp.status}: ${errText.slice(0, 200)}` }, 502);
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id:      String(chatId),
+        text:         previewText,
+        parse_mode:   "HTML",
+        reply_markup: keyboard,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
   }
 
-  // Mark dispatched
-  await run(c.env.DB,
-    "UPDATE code_changes SET status='dispatched', updated_at=? WHERE id=?",
-    [new Date().toISOString(), id],
-  );
-
   return c.json({
-    status:         "dispatched",
-    change_id:      id,
-    files_changed:  body.files.length,
-    message:        `Change dispatched to GitHub Actions. Deployment will complete in ~2 min. Results will be sent to Telegram.`,
+    status:        "pending_approval",
+    change_id:     id,
+    files_changed: body.files.length,
+    message:       `Preview sent to Telegram. Tap ✅ Deploy to trigger GitHub Actions deployment, or ❌ Cancel to abort.`,
   });
+});
+
+// ── POST /api/build/change/:id/approve ───────────────────────────────────────
+// Operator approves the preview → dispatches to GitHub Actions.
+// Also called internally by the Telegram callback handler.
+
+buildRouter.post("/api/build/change/:id/approve", async (c) => {
+  const changeId = c.req.param("id");
+  const result = await dispatchChangeToGitHub(c.env, changeId);
+  if (!result.ok) return c.json({ error: result.error }, 502);
+  return c.json({ ok: true, message: "Dispatched to GitHub Actions. ~2 min to deploy." });
+});
+
+// ── POST /api/build/change/:id/cancel ────────────────────────────────────────
+
+buildRouter.post("/api/build/change/:id/cancel", async (c) => {
+  const changeId = c.req.param("id");
+  const now = new Date().toISOString();
+  await run(c.env.DB, "UPDATE code_changes SET status='cancelled', updated_at=? WHERE id=?", [now, changeId]);
+  return c.json({ ok: true });
 });
 
 // ── GET /api/build/change/:id ─────────────────────────────────────────────────

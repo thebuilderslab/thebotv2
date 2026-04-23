@@ -23,6 +23,7 @@ import { sanitiseInput } from "../services/guardrails";
 import { handleMessage, formatTelegramResponse, logIncomingMessage, logOutgoingResponse, persistTelegramMessage } from "../services/nation-supervisor";
 import { generatePriceTargets, getStoredTargets, formatTargetsForTelegram } from "../services/price-target-service";
 import { executeOrder, loadPendingOrder, formatOrderForTelegram } from "../services/schwab-orders";
+import { dispatchChangeToGitHub } from "./build";
 
 // ── ETA estimates by task kind (seconds) ─────────────────────────────────────
 const TASK_ETA_SECONDS: Record<string, number> = {
@@ -863,6 +864,47 @@ async function handleCallbackQuery(
         `Type your question and it will be sent to <code>${agentId}</code>.\n` +
         `(Reference task: <code>${taskId}</code>)`
       );
+    }
+    return;
+  }
+
+  // ── Build pipeline: approve/cancel code change ───────────────────────────
+  // Buttons sent by /api/build/submit preview message.
+  if (prefix === "build_approve" || prefix === "build_cancel") {
+    const changeId = parts[1];
+    const chatId   = cbq.message?.chat.id;
+
+    if (!changeId) {
+      await answerCallback(env, cbq.id, "❌ Missing change ID");
+      return;
+    }
+
+    if (prefix === "build_cancel") {
+      const now = new Date().toISOString();
+      await run(env.DB, "UPDATE code_changes SET status='cancelled', updated_at=? WHERE id=?", [now, changeId]);
+      await answerCallback(env, cbq.id, "❌ Cancelled");
+      if (chatId) {
+        await sendMessage(env, chatId, `❌ <b>Deployment cancelled.</b>\nChange <code>${changeId}</code> will not be deployed.`);
+      }
+      return;
+    }
+
+    // Approve — dispatch to GitHub Actions
+    await answerCallback(env, cbq.id, "🚀 Dispatching…");
+    const result = await dispatchChangeToGitHub(env, changeId);
+    if (chatId) {
+      if (result.ok) {
+        await sendMessage(env, chatId,
+          `🚀 <b>Deploying now…</b>\n` +
+          `GitHub Actions is applying the change, running <code>wrangler deploy</code>, and will notify you here when done.\n` +
+          `Expected: ~2 min`,
+        );
+      } else {
+        await sendMessage(env, chatId,
+          `❌ <b>Dispatch failed</b>\n` +
+          `<code>${result.error ?? "Unknown error"}</code>`,
+        );
+      }
     }
     return;
   }

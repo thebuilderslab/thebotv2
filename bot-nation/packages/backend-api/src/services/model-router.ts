@@ -7,7 +7,7 @@
  * Model assignments:
  *   research          → Kimi K2.5       (256K context, agentic tool-calling, deep research)
  *   content_generation → Gemini Flash   (fast, cheap, long context)
- *   code_change        → GLM-5          (agentic planning, backend engineering)
+ *   code_change        → Qwen3.5-397B   (code generation, tool use, large context)
  *   config_change      → Qwen3.5 397B   (reasoning, low cost MoE)
  *   improvement_proposal → GLM-5        (complex orchestration)
  *   wallet_simulation  → Qwen3.5 397B   (finance reasoning)
@@ -60,9 +60,9 @@ const KIND_MODEL_MAP: Record<string, ModelConfig> = {
     temperature: 0.9,
   },
   code_change: {
-    model: MODELS.GLM_5,
-    fallback: MODELS.QWEN_397B,
-    maxTokens: 1024,
+    model: MODELS.QWEN_397B,     // strong tool-use + code gen, 256K context
+    fallback: MODELS.KIMI_K2_5,  // fallback: also excellent at agentic code tasks
+    maxTokens: 4096,              // files can be large; 1024 was too small
     temperature: 0.2,
   },
   config_change: {
