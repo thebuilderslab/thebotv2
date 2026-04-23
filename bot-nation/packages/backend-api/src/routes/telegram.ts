@@ -14,12 +14,15 @@
  * Callback queries handle approve/reject inline buttons on approval messages.
  */
 
-import { AutoRouter } from "itty-router";
+import { Hono } from 'hono';
 import type { Env } from "../index";
 import type { ApprovalBrief } from "@bot-nation/core-domain";
 import { applyChangeForApproval } from "../services/change-apply";
 import { query, queryOne, run } from "../db/schema";
 import { sanitiseInput } from "../services/guardrails";
+import { handleMessage, formatTelegramResponse, logIncomingMessage, logOutgoingResponse } from "../services/nation-supervisor";
+import { generatePriceTargets, getStoredTargets, formatTargetsForTelegram } from "../services/price-target-service";
+import { executeOrder, loadPendingOrder, formatOrderForTelegram } from "../services/schwab-orders";
 
 // ── ETA estimates by task kind (seconds) ─────────────────────────────────────
 const TASK_ETA_SECONDS: Record<string, number> = {
@@ -35,7 +38,7 @@ function progressBar(filled: number, total: number, width = 10): string {
   return `[${"█".repeat(n)}${"░".repeat(width - n)}]`;
 }
 
-export const telegramRouter = AutoRouter();
+export const telegramRouter = new Hono();
 
 // ── Valid task kinds ──────────────────────────────────────────────────────────
 
@@ -67,8 +70,9 @@ const INTEL_URL_PATTERN = /https?:\/\/(github\.com|gitlab\.com|bitbucket\.org|in
 
 // ── Main webhook handler ──────────────────────────────────────────────────────
 
-telegramRouter.post("/telegram/webhook", async (req, env: Env) => {
-  const update = (await req.json()) as TelegramUpdate;
+telegramRouter.post("/telegram/webhook", async (c) => {
+  const env = c.env as Env;
+  const update = (await c.req.json()) as TelegramUpdate;
 
   if (update.message) {
     const chatId = update.message.chat.id;
@@ -77,39 +81,167 @@ telegramRouter.post("/telegram/webhook", async (req, env: Env) => {
     console.log(`[Telegram] incoming chatId=${chatId} configured=${env.TELEGRAM_CHAT_ID}`);
     if (String(chatId) !== String(env.TELEGRAM_CHAT_ID)) {
       console.warn(`[Guardrail] Telegram message from unauthorised chat ${chatId} — dropped`);
-      return new Response("OK");
+      return c.json({ ok: true });
     }
 
     // ── Voice note → transcribe → route as text ──────────────────────────────
     if (update.message.voice ?? update.message.audio) {
       await handleVoiceMessage(chatId, update.message, env);
-      return new Response("OK");
+      return c.json({ ok: true });
+    }
+
+    // ── Photo / image → vision analysis → route as action task ───────────────
+    if (update.message.photo?.length) {
+      await handlePhotoMessage(chatId, update.message, env);
+      return c.json({ ok: true });
     }
 
     const text = update.message.text?.trim() ?? "";
+    const userId = update.message.from?.id ?? 0;
 
-    if (!text.startsWith("/") && text.length > 0) {
-      // ── Auto intel review: GitHub/social URLs sent as plain message ────────
-      const urlMatches = text.match(INTEL_URL_PATTERN);
-      if (urlMatches && urlMatches.length > 0) {
-        await handleIntelReview(chatId, urlMatches, text, env);
-      } else {
-        // ── Natural language: route as research task ─────────────────────────
-        await handleNaturalLanguageTask(chatId, text, env);
-      }
-      return new Response("OK");
+    if (!text) {
+      return c.json({ ok: true });
     }
 
-    await handleCommand(chatId, text, env);
-    return new Response("OK");
+    // ── Slash commands → dedicated handlers (NOT nation-supervisor) ──────────
+    // Nation-supervisor intercepts commands and generates fake "queued/executing"
+    // responses. Commands must be handled by the dedicated functions which query
+    // real D1 data and dispatch real tasks.
+    if (text.startsWith("/")) {
+      await handleCommand(chatId, text, env);
+      return c.json({ ok: true });
+    }
+
+    // ── URL detection — GitHub/GitLab/etc URLs go straight to intel-lead ────────
+    // Bypass the classifier entirely so the agent gets a real task with tools,
+    // not an inline LLM answer from nation-supervisor.
+    {
+      const intelUrls = text.match(INTEL_URL_PATTERN);
+      if (intelUrls && intelUrls.length > 0) {
+        await handleIntelReview(chatId, intelUrls, text, env);
+        return c.json({ ok: true });
+      }
+    }
+
+    // ── Classify message — bypass nation-supervisor for action/finance queries ──
+    // Nation-supervisor answers inline via a basic LLM call and never dispatches
+    // to AgentActor. For action queries (trading, research tasks, etc.) we create
+    // a real D1 task so the full agent pipeline runs with tools + Telegram updates.
+    if (!text.startsWith("/")) {
+      const { classifyQuery } = await import("../services/query-classifier");
+      const classification = classifyQuery(text);
+
+      if (classification.type === "action") {
+        const taskId = crypto.randomUUID();
+        const now = new Date().toISOString();
+        const teamId = classification.suggestedTeam ?? "team-research";
+        const kind = classification.suggestedTaskKind ?? "research";
+
+        // Resolve agent from team
+        const agentMap: Record<string, string> = {
+          "team-finance":  "agent-finance-lead",
+          "team-research": "agent-research-lead",
+          "team-intel":    "agent-intel-lead",
+          "team-build":    "agent-build-lead",
+          "team-growth":   "agent-growth-lead",
+          "team-infra":    "agent-infra-lead",
+        };
+        const agentId = agentMap[teamId] ?? "agent-research-lead";
+
+        // Store task in D1 with telegram_chat_id so results come back
+        await run(env.DB,
+          `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, telegram_chat_id, created_at, updated_at)
+           VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
+          [taskId, kind, agentId, teamId, JSON.stringify({ summary: text, details: "" }), chatId, now, now],
+        );
+
+        // Send immediate acknowledgement
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: `🔄 <b>On it</b> — routing to ${agentId}\n<code>${taskId}</code>`,
+            parse_mode: "HTML",
+          }),
+          signal: AbortSignal.timeout(5000),
+        });
+
+        // Emit event
+        const eventId = crypto.randomUUID();
+        await run(env.DB,
+          `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+           VALUES (?, 'task.created', NULL, 'task', ?, ?, NULL, ?, ?)`,
+          [eventId, taskId, JSON.stringify({ source: "telegram_message", chatId, text: text.slice(0, 200) }), now, now],
+        );
+
+        return c.json({ ok: true });
+      }
+    }
+
+    // ── Route commands + simple/infrastructure queries through Nation Supervisor ──
+    console.log(`[Telegram] Routing message to Nation Supervisor: "${text}"`);
+
+    try {
+      const response = await handleMessage(text, userId, chatId, env);
+      logIncomingMessage(userId, chatId, text, { type: response.queryType, confidence: response.confidence, reasoning: '' });
+
+      const telegramMessage = formatTelegramResponse(response);
+      console.log(`[Telegram] Sending response: "${telegramMessage.substring(0, 100)}..."`);
+
+      // Send response back to Telegram
+      const botToken = env.TELEGRAM_BOT_TOKEN;
+      if (!botToken) {
+        console.error('[Telegram] TELEGRAM_BOT_TOKEN not set');
+        return c.json({ ok: true });
+      }
+
+      const sendUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+      const sendResponse = await fetch(sendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: telegramMessage,
+          parse_mode: 'HTML',
+        }),
+      });
+
+      const result = await sendResponse.json() as { ok?: boolean; description?: string };
+      if (!result.ok) {
+        console.error(`[Telegram] sendMessage failed: ${result.description}`);
+      } else {
+        console.log(`[Telegram] Message sent successfully to chat ${chatId}`);
+        logOutgoingResponse(chatId, response);
+      }
+
+      return c.json({ ok: true });
+    } catch (error) {
+      console.error('[Telegram] Error in Nation Supervisor handler:', error instanceof Error ? error.message : error);
+
+      // Send error message to user
+      const botToken = env.TELEGRAM_BOT_TOKEN;
+      if (botToken) {
+        await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: '❌ Sorry, I encountered an error processing your message. Please try again.',
+          }),
+        });
+      }
+
+      return c.json({ ok: true });
+    }
   }
 
   if (update.callback_query) {
     await handleCallbackQuery(update.callback_query, env);
-    return new Response("OK");
+    return c.json({ ok: true });
   }
 
-  return new Response("OK");
+  return c.json({ ok: true });
 });
 
 // ── Command dispatcher ────────────────────────────────────────────────────────
@@ -133,7 +265,13 @@ async function handleCommand(chatId: number, text: string, env: Env): Promise<vo
         `<code>/approve &lt;proposalId&gt;</code> — approve a proposal\n` +
         `<code>/agents</code> — list active agents\n` +
         `<code>/teams</code> — list teams/departments\n` +
-        `<code>/stats</code> — system overview\n\n` +
+        `<code>/stats</code> — system overview\n` +
+        `<code>/bailey [status|search]</code> — Bailey Group pipeline\n` +
+        `<code>/targets [SYMBOL]</code> — daily &amp; weekly price targets\n` +
+        `<code>/targets add SYMBOL</code> — add symbol to watchlist\n` +
+        `<code>/setup finance</code> — configure Finance Dept (account, risk, auto-execute)\n` +
+        `<code>/finance</code> — Finance Dept status + pending orders\n` +
+        `<code>/positions</code> — live Schwab positions snapshot\n\n` +
         `Task kinds: <code>research</code> · <code>deep_research</code> · <code>content_generation</code> · <code>code_change</code> · <code>improvement_proposal</code> · <code>config_change</code> · <code>wallet_simulation</code>`
       );
       break;
@@ -172,6 +310,26 @@ async function handleCommand(chatId: number, text: string, env: Env): Promise<vo
 
     case "/crons":
       await handleCronsCommand(chatId, env);
+      break;
+
+    case "/bailey":
+      await handleBaileyCommand(chatId, args, env);
+      break;
+
+    case "/targets":
+      await handleTargetsCommand(chatId, args, env);
+      break;
+
+    case "/setup":
+      await handleSetupCommand(chatId, args, env);
+      break;
+
+    case "/finance":
+      await handleFinanceCommand(chatId, args, env);
+      break;
+
+    case "/positions":
+      await handlePositionsCommand(chatId, env);
       break;
 
     default:
@@ -445,7 +603,7 @@ async function handleStatsCommand(chatId: number, env: Env): Promise<void> {
   );
 }
 
-// ── Callback query handler (inline approve/reject buttons) ────────────────────
+// ── Callback query handler (inline approve/reject + self-learning) ────────────
 
 async function handleCallbackQuery(
   cbq: NonNullable<TelegramUpdate["callback_query"]>,
@@ -454,46 +612,289 @@ async function handleCallbackQuery(
   const { data } = cbq;
   if (!data) return;
 
-  const [, approvalId, decision] = data.split(":");
-  if (!approvalId || !decision) return;
-  if (decision !== "approved" && decision !== "rejected") return;
+  const parts = data.split(":");
+  const prefix = parts[0];
 
-  const now = new Date().toISOString();
+  // ── Self-learning: learn:AGENT:KEY:VALUE ──────────────────────────────────
+  // Emitted by intel/finance agents as inline keyboard buttons.
+  // Pressing a button writes the interest back to agent_notes so the agent
+  // learns what topics matter to the user.
+  if (prefix === "learn") {
+    const agentId = parts[1];
+    const key     = parts[2];
+    const value   = parts.slice(3).join(":");
+    if (!agentId || !key || !value) {
+      await answerCallback(env, cbq.id, "❌ Invalid learn payload");
+      return;
+    }
 
-  await run(env.DB, "UPDATE approvals SET status=?, updated_at=? WHERE id=?", [decision, now, approvalId]);
-  await run(env.DB, "UPDATE tasks SET status=?, updated_at=? WHERE approval_id=?", [decision, now, approvalId]);
+    const now = new Date().toISOString();
+    const noteId = crypto.randomUUID();
 
-  let applyNote = "";
-  if (decision === "approved") {
-    const result = await applyChangeForApproval(
-      env.DB, approvalId, String(cbq.from.id), null,
+    // UPSERT into agent_notes — update value + updated_at if key already exists
+    await run(env.DB,
+      `INSERT INTO agent_notes (id, agent_id, key, value, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(agent_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+      [noteId, agentId, key, value, now, now],
     );
-    applyNote = result.ok && result.appliedFields.length > 0
-      ? ` · applied ${result.appliedFields.length} field(s)`
-      : "";
+
+    // Acknowledge and optionally edit original message
+    await answerCallback(env, cbq.id, `✅ Noted: ${value}`);
+
+    const chatId = cbq.message?.chat.id;
+
+    // For intel interests — spawn a real research task so the agent digs deeper
+    if (key === "intel_interest" && agentId.includes("intel")) {
+      const researchTaskId = crypto.randomUUID();
+      await run(env.DB,
+        `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, telegram_chat_id, spawn_depth, created_at, updated_at)
+         VALUES (?, 'research', 'pending', ?, 'team-intel', ?, ?, 0, ?, ?)`,
+        [
+          researchTaskId,
+          agentId,
+          JSON.stringify({
+            summary: `Deep dive: ${value}`,
+            details: `The operator flagged interest in: "${value}".\n\nResearch this thoroughly:\n1. What is it exactly — repo, company, or concept?\n2. How does it relate to bot-nation? (multi-agent, Cloudflare Workers, finance/trading, or real estate tooling)\n3. Key players, stats (stars, activity), or adoption signals\n4. Recommendation: ADOPT / EVALUATE / MONITOR / SKIP — with specific integration idea or reason\n\nOutput as 5 tight bullets. No markdown tables.`,
+            source: "operator_interest",
+            interest_key: key,
+            interest_value: value,
+          }),
+          chatId ?? null,
+          now, now,
+        ],
+      );
+
+      if (chatId) {
+        await sendMessage(env, chatId,
+          `🧠 <b>Interest recorded + research started</b>\n` +
+          `Topic: <b>${value}</b>\n` +
+          `Agent <code>${agentId}</code> is digging in now → result in ~2 min\n` +
+          `Task: <code>${researchTaskId}</code>`
+        );
+      }
+    } else {
+      // Non-intel key — just confirm the note was saved
+      if (chatId) {
+        await sendMessage(env, chatId,
+          `🧠 <b>Self-learning recorded</b>\n` +
+          `Agent <code>${agentId}</code> now knows:\n` +
+          `<b>${key}</b> → ${value}`
+        );
+      }
+    }
+    return;
   }
 
+  // ── Supervisor reminder shortcut buttons ────────────────────────────────
+  if (prefix === "remind") {
+    const chatId = cbq.message?.chat.id;
+    if (!chatId) { await answerCallback(env, cbq.id, "ok"); return; }
+    const action = parts[1];
+    if (action === "view_proposals") {
+      await handleProposalsCommand(chatId, env);
+    } else if (action === "view_stats") {
+      await handleStatsCommand(chatId, env);
+    }
+    await answerCallback(env, cbq.id, "✅");
+    return;
+  }
+
+  // ── Approval: approval:ID:decision ───────────────────────────────────────
+  if (prefix === "approval") {
+    const approvalId = parts[1];
+    const decision   = parts[2];
+    if (!approvalId || !decision) return;
+    if (decision !== "approved" && decision !== "rejected") return;
+
+    const now = new Date().toISOString();
+    await run(env.DB, "UPDATE approvals SET status=?, updated_at=? WHERE id=?", [decision, now, approvalId]);
+    await run(env.DB, "UPDATE tasks SET status=?, updated_at=? WHERE approval_id=?", [decision, now, approvalId]);
+
+    let applyNote = "";
+    if (decision === "approved") {
+      const result = await applyChangeForApproval(env.DB, approvalId, String(cbq.from.id), null);
+      applyNote = result.ok && result.appliedFields.length > 0
+        ? ` · applied ${result.appliedFields.length} field(s)` : "";
+    }
+
+    await answerCallback(env, cbq.id, `Marked as ${decision}${applyNote}`);
+    return;
+  }
+
+  // ── Execute order: execute_order:ORDER_ID ─────────────────────────────────
+  // Operator taps "✅ Approve to execute" on a trade recommendation.
+  if (prefix === "execute_order") {
+    const orderId = parts[1];
+    const chatId  = cbq.message?.chat.id;
+
+    if (!orderId) {
+      await answerCallback(env, cbq.id, "❌ Missing order ID");
+      return;
+    }
+
+    // Quick check: does the order still exist?
+    const order = await loadPendingOrder(env.DB, orderId);
+    if (!order) {
+      await answerCallback(env, cbq.id, "❌ Order not found");
+      return;
+    }
+    if (order.status !== "pending_approval") {
+      await answerCallback(env, cbq.id, `ℹ️ Order already ${order.status}`);
+      return;
+    }
+
+    // Acknowledge immediately so Telegram doesn't timeout
+    await answerCallback(env, cbq.id, "⏳ Submitting to Schwab...");
+
+    const clientId     = env.SCHWAB_CLIENT_ID;
+    const clientSecret = env.SCHWAB_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      if (chatId) {
+        await sendMessage(env, chatId, "❌ <b>Schwab credentials not configured</b>\nContact administrator.");
+      }
+      return;
+    }
+
+    const result = await executeOrder(env.DB, clientId, clientSecret, orderId);
+
+    if (chatId) {
+      if (result.ok) {
+        await sendMessage(env, chatId,
+          `✅ <b>Order submitted to Schwab</b>\n` +
+          `<b>${order.description}</b>\n` +
+          `Schwab Order ID: <code>${result.order_id}</code>\n` +
+          `Status: Submitted — check TOS for fill confirmation`
+        );
+      } else {
+        await sendMessage(env, chatId,
+          `❌ <b>Order submission failed</b>\n` +
+          `<b>${order.description}</b>\n\n` +
+          `Error: ${result.error}`
+        );
+      }
+    }
+    return;
+  }
+
+  // ── Reject order: reject_order:ORDER_ID ────────────────────────────────────
+  if (prefix === "reject_order") {
+    const orderId = parts[1];
+    const chatId  = cbq.message?.chat.id;
+
+    if (!orderId) {
+      await answerCallback(env, cbq.id, "❌ Missing order ID");
+      return;
+    }
+
+    const now = new Date().toISOString();
+    await run(env.DB, `UPDATE pending_orders SET status='rejected', updated_at=? WHERE id=?`, [now, orderId]);
+
+    await answerCallback(env, cbq.id, "❌ Order rejected");
+
+    if (chatId) {
+      const order = await loadPendingOrder(env.DB, orderId);
+      await sendMessage(env, chatId,
+        `❌ <b>Trade rejected</b>` +
+        (order ? `\n${order.description}` : "")
+      );
+    }
+    return;
+  }
+
+  // ── Finance setup wizard: setup_finance:STEP:VALUE ────────────────────────
+  // Handles button presses in the /setup finance conversation flow.
+  if (prefix === "setup_finance") {
+    const step  = parts[1] ?? "";
+    const value = parts.slice(2).join(":");
+    const chatId = cbq.message?.chat.id;
+    if (!chatId) { await answerCallback(env, cbq.id, "ok"); return; }
+
+    await answerCallback(env, cbq.id, "✅");
+    await advanceFinanceSetup(chatId, step, value, env);
+    return;
+  }
+
+  // ── Follow-up: followup:AGENT_ID:ACTION:TASK_ID ───────────────────────────
+  // User taps "📋 View breakdown" or "↩ Ask a follow-up" on a finance result.
+  if (prefix === "followup") {
+    const agentId = parts[1];
+    const action  = parts[2];
+    const taskId  = parts[3];
+    const chatId  = cbq.message?.chat.id;
+
+    if (!agentId || !action || !taskId || !chatId) {
+      await answerCallback(env, cbq.id, "❌ Invalid follow-up payload");
+      return;
+    }
+
+    await answerCallback(env, cbq.id, "⏳ Loading...");
+
+    if (action === "view_breakdown") {
+      // Fetch the full task output from D1
+      const taskRow = await queryOne<{ output: string | null; kind: string }>(
+        env.DB,
+        `SELECT output, kind FROM tasks WHERE id = ? LIMIT 1`,
+        [taskId],
+      );
+
+      if (!taskRow || !taskRow.output) {
+        await sendMessage(env, chatId, `ℹ️ No breakdown available for task <code>${taskId}</code>`);
+        return;
+      }
+
+      // Trim to fit Telegram's 4096 char limit
+      const output = taskRow.output.trim().slice(0, 3800);
+      await sendMessage(env, chatId,
+        `📋 <b>Full breakdown</b> (<code>${taskRow.kind}</code>)\n` +
+        `──────────────────────\n` +
+        output
+      );
+    } else if (action === "ask_followup") {
+      // Prompt the user to type their follow-up question
+      await sendMessage(env, chatId,
+        `↩ <b>Ask a follow-up</b>\n` +
+        `Type your question and it will be sent to <code>${agentId}</code>.\n` +
+        `(Reference task: <code>${taskId}</code>)`
+      );
+    }
+    return;
+  }
+
+  // ── Legacy format without prefix: :approvalId:decision ───────────────────
+  const [, approvalId, decision] = parts;
+  if (approvalId && decision && (decision === "approved" || decision === "rejected")) {
+    const now = new Date().toISOString();
+    await run(env.DB, "UPDATE approvals SET status=?, updated_at=? WHERE id=?", [decision, now, approvalId]);
+    await run(env.DB, "UPDATE tasks SET status=?, updated_at=? WHERE approval_id=?", [decision, now, approvalId]);
+    let applyNote = "";
+    if (decision === "approved") {
+      const result = await applyChangeForApproval(env.DB, approvalId, String(cbq.from.id), null);
+      applyNote = result.ok && result.appliedFields.length > 0
+        ? ` · applied ${result.appliedFields.length} field(s)` : "";
+    }
+    await answerCallback(env, cbq.id, `Marked as ${decision}${applyNote}`);
+  }
+}
+
+async function answerCallback(env: Env, callbackQueryId: string, text: string): Promise<void> {
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      callback_query_id: cbq.id,
-      text: `Marked as ${decision}${applyNote}`,
-    }),
+    body: JSON.stringify({ callback_query_id: callbackQueryId, text }),
   });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function sendMessage(env: Env, chatId: number, text: string): Promise<void> {
+async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: object): Promise<void> {
+  const payload: Record<string, unknown> = { chat_id: chatId, text, parse_mode: "HTML" };
+  if (replyMarkup) payload.reply_markup = replyMarkup;
   const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -528,7 +929,7 @@ export async function sendApprovalToTelegram(
       reply_markup: {
         inline_keyboard: [[
           { text: "✅ Approve", callback_data: `approval:${approvalId}:approved` },
-          { text: "❌ Reject",  callback_data: `approval:${approvalId}:rejected` },
+          { text: "❌ Reject",  callback_data: `approval:${approvalId}:rejected`  },
         ]],
       },
     }),
@@ -605,6 +1006,178 @@ async function handleVoiceMessage(
     await sendMessage(env, chatId, `❌ Voice processing error: ${msg}`);
   }
 }
+// ── Photo / image → vision analysis ──────────────────────────────────────────
+
+async function handlePhotoMessage(
+  chatId: number,
+  message: NonNullable<TelegramUpdate["message"]>,
+  env: Env,
+): Promise<void> {
+  // Pick the largest photo size (Telegram sends multiple resolutions)
+  const photos = message.photo ?? [];
+  if (photos.length === 0) return;
+  const largest = photos.reduce<typeof photos[0]>((best, p) =>
+    (p.file_size ?? 0) > (best.file_size ?? 0) ? p : best, photos[0]!);
+  if (!largest) return;
+
+  const caption = message.caption?.trim() ?? "";
+  await sendMessage(env, chatId, "📸 Image received — analysing with vision...");
+
+  try {
+    // 1. Get download path from Telegram
+    const fileRes = await fetch(
+      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${largest.file_id}`,
+    );
+    const fileData = await fileRes.json<{ ok: boolean; result: { file_path: string } }>();
+    if (!fileData.ok) {
+      await sendMessage(env, chatId, "❌ Could not retrieve image from Telegram.");
+      return;
+    }
+
+    // 2. Download image bytes
+    const imgRes = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`,
+    );
+    const imgBuffer = await imgRes.arrayBuffer();
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(imgBuffer)));
+
+    // Infer media type from file path extension
+    const ext = fileData.result.file_path.split(".").pop()?.toLowerCase() ?? "jpg";
+    const mediaTypeMap: Record<string, string> = {
+      jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png",
+      gif: "image/gif", webp: "image/webp",
+    };
+    const mediaType = mediaTypeMap[ext] ?? "image/jpeg";
+
+    // 3. Ask Claude to classify + analyse the image
+    const userPrompt = caption
+      ? `${caption}\n\nFirst classify this image into exactly one category: TRADING (options chain, brokerage screenshot, chart with ticker symbols, P&L data), DOCUMENT (contract, form, text-heavy page, email, message screenshot), PROPERTY (real estate photo, house/building exterior or interior, land), BUSINESS_DATA (non-trading chart, graph, spreadsheet, analytics dashboard), or GENERAL (everything else: personal photo, product, meme, etc.).\n\nThen provide a detailed analysis. If TRADING: extract symbols, strikes, expiry, Greeks, P&L. If DOCUMENT: transcribe key text and flag action items. If PROPERTY: describe condition, features, estimate ARV context. If BUSINESS_DATA: extract data points and trends. If GENERAL: describe what you see.`
+      : "First classify this image into exactly one category: TRADING (options chain, brokerage screenshot, chart with ticker symbols, P&L data), DOCUMENT (contract, form, text-heavy page, email, message screenshot), PROPERTY (real estate photo, house/building exterior or interior, land), BUSINESS_DATA (non-trading chart, graph, spreadsheet, analytics dashboard), or GENERAL (everything else: personal photo, product, meme, etc.).\n\nThen provide a detailed analysis based on the category. For TRADING: extract all symbols, strikes, expiry dates, Greeks, and P&L. For DOCUMENT: transcribe key text and flag action items. For PROPERTY: describe condition, features, location clues. For BUSINESS_DATA: extract all data points. For GENERAL: describe what you see and any useful context.";
+
+    const claudeRes = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-opus-4-5",
+        max_tokens: 1500,
+        messages: [{
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: { type: "base64", media_type: mediaType, data: base64 },
+            },
+            { type: "text", text: userPrompt },
+          ],
+        }],
+      }),
+    });
+
+    const claudeData = await claudeRes.json<{
+      content?: Array<{ type: string; text?: string }>;
+      error?: { message: string };
+    }>();
+
+    if (!claudeRes.ok || claudeData.error) {
+      await sendMessage(env, chatId, `❌ Vision analysis error: ${claudeData.error?.message ?? "unknown"}`);
+      return;
+    }
+
+    const visionText = claudeData.content?.find(b => b.type === "text")?.text ?? "(no analysis)";
+
+    // 4. Detect image category from Claude's response, then route accordingly
+    const categoryMatch = visionText.match(/\b(TRADING|DOCUMENT|PROPERTY|BUSINESS_DATA|GENERAL)\b/);
+    const imageCategory = categoryMatch?.[1] ?? "GENERAL";
+
+    // Map image category → agent routing
+    const categoryRouting: Record<string, { teamId: string; agentId: string; kind: string; emoji: string }> = {
+      TRADING:       { teamId: "team-finance",  agentId: "agent-finance-lead",             kind: "research",           emoji: "📈" },
+      DOCUMENT:      { teamId: "team-research", agentId: "agent-research-lead",            kind: "research",           emoji: "📄" },
+      PROPERTY:      { teamId: "team-agency",   agentId: "agent-agency-pipelineops",       kind: "lead_qualification", emoji: "🏠" },
+      BUSINESS_DATA: { teamId: "team-intel",    agentId: "agent-intel-lead",               kind: "intel_review",       emoji: "📊" },
+      GENERAL:       { teamId: "team-research", agentId: "agent-research-lead",            kind: "research",           emoji: "🖼️" },
+    };
+
+    const routing = categoryRouting[imageCategory] ?? categoryRouting["GENERAL"]!;
+
+    // Self-learning keyboard varies by category
+    const learnKeyboards: Record<string, object> = {
+      TRADING: { inline_keyboard: [[
+        { text: "📈 More chart analysis",  callback_data: `learn:${routing.agentId}:photo_interest:chart_analysis` },
+        { text: "🎯 Options strategy",      callback_data: `learn:${routing.agentId}:photo_interest:options_strategy` },
+        { text: "✓ Good",                   callback_data: `learn:${routing.agentId}:photo_interest:no_preference` },
+      ]] },
+      DOCUMENT: { inline_keyboard: [[
+        { text: "📋 Extract action items",  callback_data: `learn:${routing.agentId}:photo_interest:action_items` },
+        { text: "📝 Summarise contract",    callback_data: `learn:${routing.agentId}:photo_interest:contract_summary` },
+        { text: "✓ Good",                   callback_data: `learn:${routing.agentId}:photo_interest:no_preference` },
+      ]] },
+      PROPERTY: { inline_keyboard: [[
+        { text: "🏠 Run ARV estimate",      callback_data: `learn:${routing.agentId}:photo_interest:arv_estimate` },
+        { text: "🔍 Research owner",        callback_data: `learn:${routing.agentId}:photo_interest:owner_research` },
+        { text: "✓ Good",                   callback_data: `learn:${routing.agentId}:photo_interest:no_preference` },
+      ]] },
+      BUSINESS_DATA: { inline_keyboard: [[
+        { text: "📊 Deep data analysis",    callback_data: `learn:${routing.agentId}:photo_interest:deep_analysis` },
+        { text: "📉 Competitive intel",     callback_data: `learn:${routing.agentId}:photo_interest:competitive_intel` },
+        { text: "✓ Good",                   callback_data: `learn:${routing.agentId}:photo_interest:no_preference` },
+      ]] },
+      GENERAL: { inline_keyboard: [[
+        { text: "🔍 Research this",         callback_data: `learn:${routing.agentId}:photo_interest:research` },
+        { text: "✓ Just info",              callback_data: `learn:${routing.agentId}:photo_interest:no_preference` },
+      ]] },
+    };
+
+    const taskId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    // For GENERAL with no caption — skip creating a task, just reply with analysis
+    if (imageCategory === "GENERAL" && !caption) {
+      await sendMessage(env, chatId,
+        `${routing.emoji} <b>Image Analysis</b>\n\n${visionText.slice(0, 3500)}`
+      );
+      return;
+    }
+
+    // Create D1 task for all other categories
+    await run(env.DB,
+      `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, telegram_chat_id, created_at, updated_at)
+       VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
+      [taskId, routing.kind, routing.agentId, routing.teamId,
+       JSON.stringify({
+         summary: caption || `${imageCategory} image analysis`,
+         details: visionText,
+         source: "telegram_photo",
+         image_category: imageCategory,
+       }),
+       chatId, now, now],
+    );
+
+    const learnKeyboard = learnKeyboards[imageCategory] ?? learnKeyboards["GENERAL"];
+
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        parse_mode: "HTML",
+        text:
+          `${routing.emoji} <b>${imageCategory} — Vision Analysis</b>\n\n${visionText.slice(0, 900)}\n\n` +
+          `🔄 Routing to <code>${routing.agentId}</code>\n<code>${taskId}</code>`,
+        reply_markup: learnKeyboard,
+      }),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await sendMessage(env, chatId, `❌ Photo processing error: ${msg}`);
+  }
+}
+
 // ── Brief parsing ─────────────────────────────────────────────────────────────
 
 interface ParsedTask {
@@ -744,8 +1317,8 @@ async function handleIntelReview(
       : `url: ${url}`;
 
     await run(env.DB,
-      `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, spawn_depth, created_at, updated_at)
-       VALUES (?, 'intel_review', 'pending', 'agent-intel-lead', 'team-intel', ?, 0, ?, ?)`,
+      `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, telegram_chat_id, spawn_depth, created_at, updated_at)
+       VALUES (?, 'intel_review', 'pending', 'agent-intel-lead', 'team-intel', ?, ?, 0, ?, ?)`,
       [
         taskId,
         JSON.stringify({
@@ -755,6 +1328,7 @@ async function handleIntelReview(
           url,
           ...(githubMatch ? { owner: githubMatch[1], repo: githubMatch[2] } : {}),
         }),
+        chatId,
         now, now,
       ],
     );
@@ -768,7 +1342,7 @@ async function handleIntelReview(
     const tgRes = await fetch(
       `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
       { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, text: intelText, parse_mode: "Markdown" }) },
+        body: JSON.stringify({ chat_id: chatId, text: intelText, parse_mode: "HTML" }) },
     );
     const tgData = await tgRes.json<{ ok: boolean; result?: { message_id: number } }>();
     if (tgData.ok && tgData.result?.message_id) {
@@ -798,7 +1372,7 @@ async function handleProposeCommand(chatId: number, args: string[], env: Env): P
     return;
   }
 
-  const proposalType = args[0]?.toLowerCase();
+  const proposalType = (args[0] ?? "").toLowerCase();
   const proposalContent = args.slice(1).join(" ");
 
   if (!["cron_request", "dept_task", "tool_add", "agent_add"].includes(proposalType)) {
@@ -871,6 +1445,219 @@ async function handleCronsCommand(chatId: number, env: Env): Promise<void> {
   );
 }
 
+// ── /targets — Price target commands ─────────────────────────────────────────
+//
+// /targets              → fresh targets for all watchlist symbols
+// /targets AAPL         → fresh target for AAPL only
+// /targets add NVDA     → add NVDA to watchlist then generate targets for it
+
+async function handleTargetsCommand(chatId: number, args: string[], env: Env): Promise<void> {
+  // /targets add SYMBOL
+  if (args[0]?.toLowerCase() === "add") {
+    const symbol = args[1]?.toUpperCase();
+    if (!symbol) {
+      await sendMessage(env, chatId, `Usage: <code>/targets add SYMBOL</code>\nExample: <code>/targets add NVDA</code>`);
+      return;
+    }
+
+    // Add to watchlist (INSERT OR IGNORE in case it already exists)
+    const id  = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await run(
+      env.DB,
+      `INSERT OR IGNORE INTO tws_watchlist (id, symbol, asset_type, notes, created_at, updated_at)
+       VALUES (?, ?, 'equity', NULL, ?, ?)`,
+      [id, symbol, now, now],
+    );
+
+    await sendMessage(env, chatId, `✅ <b>${symbol}</b> added to watchlist — generating targets…`);
+
+    const targets = await generatePriceTargets(
+      env.DB,
+      {
+        TRADING_URL: env.TRADING_URL,
+        ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+        OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
+      },
+      [symbol],
+    );
+
+    if (targets.length === 0) {
+      await sendMessage(env, chatId, `⚠️ Could not generate targets for <b>${symbol}</b> — check that the symbol is valid and the analysis service is available.`);
+      return;
+    }
+
+    const msg = formatTargetsForTelegram(targets);
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "Markdown" }),
+    });
+    return;
+  }
+
+  // /targets AAPL — single symbol
+  if (args.length > 0 && args[0]) {
+    const symbol = args[0].toUpperCase();
+    await sendMessage(env, chatId, `⏳ Analyzing <b>${symbol}</b>…`);
+
+    const targets = await generatePriceTargets(
+      env.DB,
+      {
+        TRADING_URL: env.TRADING_URL,
+        ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+        OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
+      },
+      [symbol],
+    );
+
+    if (targets.length === 0) {
+      // Fall back to stored targets
+      const stored = await getStoredTargets(env.DB, symbol);
+      if (stored.length > 0) {
+        const msg = formatTargetsForTelegram([stored[0]!]);
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, text: msg + "\n\n_⚠️ Using cached data — live analysis unavailable_", parse_mode: "Markdown" }),
+        });
+      } else {
+        await sendMessage(env, chatId, `⚠️ No targets available for <b>${symbol}</b>.`);
+      }
+      return;
+    }
+
+    const msg = formatTargetsForTelegram(targets);
+    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "Markdown" }),
+    });
+    return;
+  }
+
+  // /targets — all watchlist symbols
+  // Determine watchlist count for progress message
+  const watchlist = await query<{ symbol: string }>(
+    env.DB,
+    "SELECT symbol FROM tws_watchlist WHERE active=1 ORDER BY symbol ASC",
+    [],
+  );
+
+  if (watchlist.length === 0) {
+    await sendMessage(env, chatId,
+      `📋 Watchlist is empty.\n\nAdd symbols first:\n<code>/targets add AAPL</code>`
+    );
+    return;
+  }
+
+  await sendMessage(env, chatId, `⏳ Analyzing ${watchlist.length} symbol${watchlist.length !== 1 ? "s" : ""}…`);
+
+  const targets = await generatePriceTargets(
+    env.DB,
+    {
+      TRADING_URL: env.TRADING_URL,
+      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+      OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
+    },
+  );
+
+  if (targets.length === 0) {
+    // Serve stored targets as fallback
+    const stored = await getStoredTargets(env.DB);
+    if (stored.length > 0) {
+      const msg = formatTargetsForTelegram(stored);
+      await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text: msg + "\n\n_⚠️ Using cached data — live analysis unavailable_", parse_mode: "Markdown" }),
+      });
+    } else {
+      await sendMessage(env, chatId, `⚠️ Could not generate price targets. Make sure TRADING_URL or OPENROUTER_API_KEY is configured.`);
+    }
+    return;
+  }
+
+  const msg = formatTargetsForTelegram(targets);
+  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: "Markdown" }),
+  });
+}
+
+// ── /bailey — Bailey Group pipeline control ───────────────────────────────────
+
+async function handleBaileyCommand(chatId: number, args: string[], env: Env): Promise<void> {
+  const sub = args[0]?.toLowerCase();
+
+  // /bailey status — show pipeline snapshot
+  if (!sub || sub === "status") {
+    const [pending, running, completed, failed, hot, warm] = await Promise.all([
+      query<{ c: number }>(env.DB, `SELECT COUNT(*) as c FROM tasks WHERE kind='propstream_lead_score' AND status='pending'`, []),
+      query<{ c: number }>(env.DB, `SELECT COUNT(*) as c FROM tasks WHERE kind='propstream_lead_score' AND status='running'`, []),
+      query<{ id: string; output: string }>(env.DB,
+        `SELECT id, output FROM tasks WHERE kind='propstream_lead_score' AND status='completed' ORDER BY updated_at DESC LIMIT 10`, []),
+      query<{ c: number }>(env.DB, `SELECT COUNT(*) as c FROM tasks WHERE kind='propstream_lead_score' AND status='failed'`, []),
+      query<{ c: number }>(env.DB, `SELECT COUNT(*) as c FROM tasks WHERE kind='seller_outbound_call' AND status='pending'`, []),
+      query<{ c: number }>(env.DB, `SELECT COUNT(*) as c FROM tasks WHERE kind='seller_outbound_call' AND status='completed'`, []),
+    ]);
+
+    const completedList = completed.map((t) => {
+      const out = JSON.parse(t.output ?? "{}") as { disposition?: string; score?: number };
+      const emoji = out.disposition === "hot" ? "🔥" : out.disposition === "warm" ? "🟠" : "❄️";
+      return `${emoji} ${out.disposition?.toUpperCase() ?? "?"} (${out.score ?? 0}/12) — ${t.id.slice(0, 8)}`;
+    }).join("\n") || "  None yet";
+
+    await sendMessage(env, chatId,
+      `🏢 <b>Bailey Group Pipeline</b>\n\n` +
+      `📥 Pending leads: ${(pending[0] as any)?.c ?? 0}\n` +
+      `⚙️ Running: ${(running[0] as any)?.c ?? 0}\n` +
+      `❌ Failed: ${(failed[0] as any)?.c ?? 0}\n\n` +
+      `📞 Voice calls queued: ${(hot[0] as any)?.c ?? 0}\n` +
+      `✅ Calls completed: ${(warm[0] as any)?.c ?? 0}\n\n` +
+      `<b>Recent Scored Leads:</b>\n${completedList}\n\n` +
+      `Commands:\n` +
+      `<code>/bailey search</code> — trigger AI property search\n` +
+      `<code>/bailey status</code> — this view`
+    );
+    return;
+  }
+
+  // /bailey search — trigger automated property search + ingest
+  if (sub === "search") {
+    await sendMessage(env, chatId, `🔍 Triggering Bailey Group property search via Perplexity…`);
+    try {
+      const workerUrl = "https://bot-nation-api.thejamalshackleford.workers.dev";
+      const res = await fetch(`${workerUrl}/api/bailey/search-and-ingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        await sendMessage(env, chatId, `❌ Search failed: ${res.status} — ${err.slice(0, 200)}`);
+      } else {
+        const result = await res.json() as { status: string; ingest_summary?: { new_leads: number; tasks_spawned: number } };
+        await sendMessage(env, chatId,
+          `✅ <b>Bailey Search Complete</b>\n\n` +
+          `New leads found: ${result.ingest_summary?.new_leads ?? 0}\n` +
+          `Tasks spawned: ${result.ingest_summary?.tasks_spawned ?? 0}\n\n` +
+          `Leads will be auto-scored within 5 minutes.`
+        );
+      }
+    } catch (err) {
+      await sendMessage(env, chatId, `❌ Search error: ${String(err)}`);
+    }
+    return;
+  }
+
+  await sendMessage(env, chatId,
+    `🏢 <b>Bailey Group Commands</b>\n\n` +
+    `<code>/bailey status</code> — pipeline snapshot\n` +
+    `<code>/bailey search</code> — AI property search + ingest`
+  );
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface TelegramUpdate {
@@ -879,12 +1666,316 @@ interface TelegramUpdate {
     text?: string;
     voice?: { file_id: string; duration: number };
     audio?: { file_id: string; duration: number };
+    photo?: Array<{ file_id: string; width: number; height: number; file_size?: number }>;
+    caption?: string;
+    document?: { file_id: string; mime_type?: string; file_name?: string };
     chat: { id: number };
     from?: { id: number; username?: string };
   };
   callback_query?: {
     id: string;
     from: { id: number };
+    message?: { message_id: number; chat: { id: number } };
     data?: string;
   };
+}
+
+// ── /setup finance — conversational setup wizard ──────────────────────────────
+// State is stored in agent_notes under key `finance_setup_state_{chatId}`.
+// Steps: account → max_contracts → stop_pct → target_pct → auto_execute → confirm
+
+async function handleSetupCommand(chatId: number, args: string[], env: Env): Promise<void> {
+  const sub = (args[0] ?? "").toLowerCase();
+
+  if (sub !== "finance") {
+    await sendMessage(env, chatId,
+      `⚙️ <b>Setup Wizard</b>\n\nAvailable: <code>/setup finance</code> — configure your Finance Dept trading preferences`
+    );
+    return;
+  }
+
+  // Start fresh setup state
+  const now = new Date().toISOString();
+  await run(env.DB,
+    `INSERT INTO agent_notes (id, agent_id, key, value, created_at, updated_at)
+     VALUES (?, 'agent-finance-lead', ?, ?, ?, ?)
+     ON CONFLICT(agent_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+    [crypto.randomUUID(), `finance_setup_state_${chatId}`, JSON.stringify({ step: "account" }), now, now],
+  );
+
+  await sendMessage(env, chatId,
+    `⚙️ <b>Finance Dept Setup</b>\n\n` +
+    `Let's configure your trading preferences. I'll ask a few questions.\n\n` +
+    `<b>Step 1 of 5 — Which Schwab account should trades execute in?</b>`,
+    {
+      inline_keyboard: [[
+        { text: "📈 Individual (...749)",  callback_data: "setup_finance:account:749" },
+        { text: "💰 Roth IRA (...105)",    callback_data: "setup_finance:account:105" },
+      ], [
+        { text: "👥 Joint Tenant (...266)", callback_data: "setup_finance:account:266" },
+      ]],
+    }
+  );
+}
+
+// State machine: advance one step at a time
+async function advanceFinanceSetup(chatId: number, step: string, value: string, env: Env): Promise<void> {
+  const now = new Date().toISOString();
+  const stateKey = `finance_setup_state_${chatId}`;
+
+  // Load current state
+  const stateRow = await queryOne<{ value: string }>(
+    env.DB,
+    `SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key=?`,
+    [stateKey],
+  );
+  const state = stateRow ? JSON.parse(stateRow.value) as Record<string, string> : {};
+
+  // Save the answered step
+  state[step] = value;
+
+  const upsertState = async (s: Record<string, string>) => {
+    await run(env.DB,
+      `INSERT INTO agent_notes (id, agent_id, key, value, created_at, updated_at)
+       VALUES (?, 'agent-finance-lead', ?, ?, ?, ?)
+       ON CONFLICT(agent_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+      [crypto.randomUUID(), stateKey, JSON.stringify(s), now, now],
+    );
+  };
+
+  await upsertState(state);
+
+  if (step === "account") {
+    const labels: Record<string, string> = { "749": "Individual", "105": "Roth IRA", "266": "Joint Tenant" };
+    await sendMessage(env, chatId,
+      `✅ Account: <b>${labels[value] ?? value} (...${value})</b>\n\n` +
+      `<b>Step 2 of 5 — Max contracts per trade?</b>\n` +
+      `How many contracts at most per single order?`,
+      {
+        inline_keyboard: [[
+          { text: "1 contract",  callback_data: "setup_finance:max_contracts:1" },
+          { text: "2 contracts", callback_data: "setup_finance:max_contracts:2" },
+          { text: "5 contracts", callback_data: "setup_finance:max_contracts:5" },
+        ]],
+      }
+    );
+
+  } else if (step === "max_contracts") {
+    await sendMessage(env, chatId,
+      `✅ Max contracts: <b>${value}</b>\n\n` +
+      `<b>Step 3 of 5 — Stop-loss threshold?</b>\n` +
+      `Close the position when the option mark reaches what % of your entry?`,
+      {
+        inline_keyboard: [[
+          { text: "25% (tight)",    callback_data: "setup_finance:stop_pct:25" },
+          { text: "35% (standard)", callback_data: "setup_finance:stop_pct:35" },
+          { text: "50% (loose)",    callback_data: "setup_finance:stop_pct:50" },
+        ]],
+      }
+    );
+
+  } else if (step === "stop_pct") {
+    await sendMessage(env, chatId,
+      `✅ Stop-loss: <b>${value}% of entry</b>\n\n` +
+      `<b>Step 4 of 5 — Profit target / roll trigger?</b>\n` +
+      `Roll or take profit when the option gains what %?`,
+      {
+        inline_keyboard: [[
+          { text: "100% (2×)",       callback_data: "setup_finance:target_pct:100" },
+          { text: "180% (standard)", callback_data: "setup_finance:target_pct:180" },
+          { text: "200% (patient)",  callback_data: "setup_finance:target_pct:200" },
+        ]],
+      }
+    );
+
+  } else if (step === "target_pct") {
+    await sendMessage(env, chatId,
+      `✅ Profit target: <b>${value}%</b>\n\n` +
+      `<b>Step 5 of 5 — Auto-execute mode?</b>\n` +
+      `Should Bot Nation execute trades automatically once the threshold is hit,\n` +
+      `or always ask you first via Telegram?`,
+      {
+        inline_keyboard: [[
+          { text: "🔔 Always ask me first (recommended)", callback_data: "setup_finance:auto_execute:ask" },
+        ], [
+          { text: "⚡ Auto-execute credits only (≤ $50 net debit)",  callback_data: "setup_finance:auto_execute:credits_only" },
+          { text: "🤖 Auto-execute all (advanced)",                  callback_data: "setup_finance:auto_execute:all" },
+        ]],
+      }
+    );
+
+  } else if (step === "auto_execute") {
+    // All steps answered — commit to agent_notes and activate Finance Dept
+    const account   = state["account"]       ?? "749";
+    const maxContr  = state["max_contracts"] ?? "1";
+    const stopPct   = state["stop_pct"]      ?? "35";
+    const targetPct = state["target_pct"]    ?? "180";
+    const autoExec  = value;
+
+    const autoLabel: Record<string, string> = {
+      ask:           "Always ask first",
+      credits_only:  "Auto-execute net credits only",
+      all:           "Auto-execute all",
+    };
+    const acctLabel: Record<string, string> = { "749": "Individual", "105": "Roth IRA", "266": "Joint Tenant" };
+
+    // Write all settings to agent_notes
+    const settings: Array<[string, string]> = [
+      ["default_account",   account],
+      ["max_contracts",     maxContr],
+      ["stop_loss_pct",     stopPct],
+      ["profit_target_pct", targetPct],
+      ["auto_execute",      autoExec],
+      ["finance_setup_complete", "true"],
+    ];
+
+    for (const [key, val] of settings) {
+      await run(env.DB,
+        `INSERT INTO agent_notes (id, agent_id, key, value, created_at, updated_at)
+         VALUES (?, 'agent-finance-lead', ?, ?, ?, ?)
+         ON CONFLICT(agent_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+        [crypto.randomUUID(), key, val, now, now],
+      );
+    }
+
+    // Clean up setup state
+    await run(env.DB,
+      `DELETE FROM agent_notes WHERE agent_id='agent-finance-lead' AND key=?`,
+      [stateKey],
+    );
+
+    // Activate Finance Dept team in agents table
+    await run(env.DB,
+      `UPDATE agents SET status='active', updated_at=? WHERE id='agent-finance-lead'`,
+      [now],
+    );
+
+    await sendMessage(env, chatId,
+      `✅ <b>Finance Dept Activated!</b>\n\n` +
+      `Here's your configuration:\n\n` +
+      `🏦 <b>Account:</b> ${acctLabel[account] ?? account} (...${account})\n` +
+      `📊 <b>Max contracts:</b> ${maxContr} per trade\n` +
+      `🛑 <b>Stop-loss:</b> ${stopPct}% of entry (close when option hits ${stopPct}% of what you paid)\n` +
+      `🎯 <b>Profit target:</b> ${targetPct}% gain → roll or take profit\n` +
+      `⚡ <b>Auto-execute:</b> ${autoLabel[autoExec] ?? autoExec}\n\n` +
+      `<b>Weekly schedule:</b>\n` +
+      `• Sun 8 PM ET — weekly trade plan + entry recommendation\n` +
+      `• Mon–Fri 8:30 AM ET — morning brief with position status\n` +
+      `• Mon–Fri 4:30 PM ET — EOD wrap-up + exit check\n\n` +
+      `Agent memory updated. Finance Dept is now <b>LIVE</b>.\n` +
+      `Use <code>/finance</code> anytime to check status.`
+    );
+  }
+}
+
+// ── /finance — Finance Dept dashboard ─────────────────────────────────────────
+
+async function handleFinanceCommand(chatId: number, args: string[], env: Env): Promise<void> {
+  // Check if setup is complete
+  const setupDone = await queryOne<{ value: string }>(
+    env.DB,
+    `SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='finance_setup_complete'`,
+    [],
+  );
+
+  if (!setupDone?.value) {
+    await sendMessage(env, chatId,
+      `⚠️ <b>Finance Dept not yet configured</b>\n\nRun <code>/setup finance</code> to get started.`,
+    );
+    return;
+  }
+
+  // Load settings
+  const [account, maxC, stop, target, autoExec] = await Promise.all([
+    queryOne<{ value: string }>(env.DB, `SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='default_account'`, []),
+    queryOne<{ value: string }>(env.DB, `SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='max_contracts'`, []),
+    queryOne<{ value: string }>(env.DB, `SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='stop_loss_pct'`, []),
+    queryOne<{ value: string }>(env.DB, `SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='profit_target_pct'`, []),
+    queryOne<{ value: string }>(env.DB, `SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='auto_execute'`, []),
+  ]);
+
+  // Count pending orders
+  const pendingOrders = await query<{ id: string; description: string; expires_at: string }>(
+    env.DB,
+    `SELECT id, description, expires_at FROM pending_orders
+     WHERE status='pending_approval' AND expires_at > datetime('now')
+     ORDER BY created_at DESC LIMIT 5`,
+    [],
+  );
+
+  const acctLabel: Record<string, string> = { "749": "Individual", "105": "Roth IRA", "266": "Joint Tenant" };
+  const acct = account?.value ?? "749";
+
+  let pendingText = "";
+  if (pendingOrders.length > 0) {
+    pendingText = `\n\n⏳ <b>${pendingOrders.length} order(s) awaiting approval:</b>\n` +
+      pendingOrders.map((o) =>
+        `• ${o.description}\n  Expires: ${new Date(o.expires_at).toLocaleTimeString("en-US", { timeZone: "America/New_York" })} ET`
+      ).join("\n");
+  }
+
+  await sendMessage(env, chatId,
+    `◈ <b>Finance Dept Status</b>\n\n` +
+    `🏦 Account: ${acctLabel[acct] ?? acct} (...${acct})\n` +
+    `📊 Max contracts: ${maxC?.value ?? "1"}\n` +
+    `🛑 Stop-loss: ${stop?.value ?? "35"}%\n` +
+    `🎯 Profit target: ${target?.value ?? "180"}%\n` +
+    `⚡ Auto-execute: ${autoExec?.value ?? "ask"}\n` +
+    pendingText +
+    `\n\n<i>Next brief: weekday 8:30 AM ET · Weekly plan: Sunday 8 PM ET</i>`,
+    pendingOrders.length > 0 ? {
+      inline_keyboard: [[
+        { text: "📋 View pending orders", callback_data: "setup_finance:view_pending:all" },
+        { text: "⚙️ Update settings",     callback_data: "setup_finance:restart:yes" },
+      ]],
+    } : {
+      inline_keyboard: [[
+        { text: "⚙️ Update settings", callback_data: "setup_finance:restart:yes" },
+        { text: "📊 Run analysis now", callback_data: "setup_finance:run_analysis:now" },
+      ]],
+    }
+  );
+}
+
+// ── /positions — live position snapshot ───────────────────────────────────────
+
+async function handlePositionsCommand(chatId: number, env: Env): Promise<void> {
+  const clientId     = env.SCHWAB_CLIENT_ID;
+  const clientSecret = env.SCHWAB_CLIENT_SECRET;
+
+  if (!clientId || !clientSecret) {
+    await sendMessage(env, chatId, `❌ Schwab credentials not configured`);
+    return;
+  }
+
+  await sendMessage(env, chatId, `⏳ Fetching live positions from Schwab...`);
+
+  try {
+    const { syncPositions, getStoredPositions, fetchQuotes, formatPositionsForTelegram, calcPortfolioTotals } = await import("../services/schwab-positions");
+
+    await syncPositions(env.DB, clientId, clientSecret);
+    const { positions, accounts } = await getStoredPositions(env.DB);
+
+    if (positions.length === 0) {
+      await sendMessage(env, chatId, `📭 No positions found in Schwab account.`);
+      return;
+    }
+
+    const symbols = [...new Set(positions.map((p) => p.symbol))];
+    const quotes  = await fetchQuotes(env.DB, clientId, clientSecret, symbols);
+    const totals  = calcPortfolioTotals(accounts, positions);
+
+    const text = formatPositionsForTelegram(accounts, positions, quotes);
+    await sendMessage(env, chatId, text);
+
+    await sendMessage(env, chatId,
+      `📊 <b>Portfolio Totals</b>\n` +
+      `Total value: <b>$${totals.total_value.toFixed(2)}</b>\n` +
+      `Day P&L: <b>${totals.total_day_pnl >= 0 ? "+" : ""}$${totals.total_day_pnl.toFixed(2)}</b>\n` +
+      `Unrealized: <b>${totals.total_unrealized_pnl >= 0 ? "+" : ""}$${totals.total_unrealized_pnl.toFixed(2)}</b>`
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await sendMessage(env, chatId, `❌ Positions error: ${msg.slice(0, 300)}`);
+  }
 }

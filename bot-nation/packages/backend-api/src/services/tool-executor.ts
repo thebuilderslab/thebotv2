@@ -10,7 +10,7 @@
  *   http_api   — POST body as JSON to tool.endpoint
  */
 
-import { queryOne } from "../db/schema";
+import { query, queryOne } from "../db/schema";
 
 export interface ToolCallResult {
   ok: boolean;
@@ -32,12 +32,139 @@ interface ToolRow {
   endpoint: string | null;
 }
 
+// ── Agent introspection — allowed views/queries (read-only, no raw SQL) ───────
+// Agents call this with toolName="query_db" and input.view = one of the keys below.
+// Each key maps to a parameterized query; agents cannot pass arbitrary SQL.
+
+const INTROSPECTION_QUERIES: Record<string, { sql: string; params: (i: Record<string, unknown>) => (string | number | null)[] }> = {
+  // My recent tasks (last 24h)
+  my_tasks: {
+    sql: `SELECT id, kind, status, retry_count, created_at, updated_at
+          FROM tasks WHERE assigned_agent_id = ?
+          ORDER BY created_at DESC LIMIT 20`,
+    params: (i) => [String(i["agent_id"] ?? "")],
+  },
+  // My stored notes / memory (sensitive keys like tokens/secrets are redacted)
+  my_notes: {
+    sql: `SELECT key,
+            CASE WHEN key LIKE '%token%' OR key LIKE '%secret%' OR key LIKE '%password%' OR key LIKE '%key%'
+                 THEN '[REDACTED — credential]'
+                 ELSE value
+            END AS value,
+            updated_at
+          FROM agent_notes WHERE agent_id = ? ORDER BY updated_at DESC`,
+    params: (i) => [String(i["agent_id"] ?? "")],
+  },
+  // System health snapshot
+  system_health: {
+    sql: `SELECT * FROM system_health`,
+    params: () => [],
+  },
+  // Active scheduled crons
+  active_crons: {
+    sql: `SELECT id, cron_expression, task_kind, agent_id, status, last_run_at, run_count
+          FROM scheduled_crons WHERE status='active' ORDER BY created_at DESC LIMIT 20`,
+    params: () => [],
+  },
+  // Pending proposals
+  pending_proposals: {
+    sql: `SELECT id, type, title, description, cron_expression, task_kind, created_at
+          FROM proposals WHERE status='pending' ORDER BY created_at DESC LIMIT 10`,
+    params: () => [],
+  },
+  // Active agents list
+  agents: {
+    sql: `SELECT id, name, role, domain, status FROM agents WHERE status='active' ORDER BY domain`,
+    params: () => [],
+  },
+  // Recent failed tasks (last 4h)
+  recent_failures: {
+    sql: `SELECT id, kind, assigned_agent_id, retry_count, updated_at
+          FROM tasks WHERE status='failed' AND updated_at > datetime('now','-4 hours')
+          ORDER BY updated_at DESC LIMIT 10`,
+    params: () => [],
+  },
+  // My cost for today
+  my_cost_today: {
+    sql: `SELECT SUM(
+            CAST(json_extract(a.content,'$.promptTokens') AS REAL) * 0.0000005 +
+            CAST(json_extract(a.content,'$.completionTokens') AS REAL) * 0.0000015
+          ) as cost_usd,
+          COUNT(*) as task_count
+          FROM artifacts a
+          JOIN tasks t ON t.id = a.task_id
+          WHERE a.kind='cost'
+            AND t.assigned_agent_id = ?
+            AND a.created_at > date('now')`,
+    params: (i) => [String(i["agent_id"] ?? "")],
+  },
+
+  // ── Skill library views ───────────────────────────────────────────────────
+
+  // Top skills by quality score — for refinement sessions
+  skill_library: {
+    sql: `SELECT id, name, description, trigger_pattern, quality_score,
+                 created_at, updated_at
+          FROM skills
+          ORDER BY quality_score DESC, updated_at DESC
+          LIMIT 30`,
+    params: () => [],
+  },
+
+  // Full procedure for a specific skill (pass skill_id in input)
+  skill_detail: {
+    sql: `SELECT s.id, s.name, s.description, s.trigger_pattern, s.procedure,
+                 s.quality_score, s.created_from_task_id,
+                 s.created_at, s.updated_at,
+                 (SELECT COUNT(*) FROM skill_refinements r WHERE r.skill_id = s.id) AS refinement_count,
+                 (SELECT SUM(r.quality_delta) FROM skill_refinements r WHERE r.skill_id = s.id) AS total_delta
+          FROM skills s
+          WHERE s.id = ?`,
+    params: (i) => [String(i["skill_id"] ?? "")],
+  },
+
+  // Recent skill refinement history
+  skill_refinements: {
+    sql: `SELECT r.id, r.skill_id, s.name AS skill_name,
+                 r.quality_delta, r.notes, r.refined_by, r.created_at
+          FROM skill_refinements r
+          JOIN skills s ON s.id = r.skill_id
+          ORDER BY r.created_at DESC
+          LIMIT 20`,
+    params: () => [],
+  },
+};
+
+export async function executeIntrospection(
+  db: D1Database,
+  toolInput: Record<string, unknown>,
+): Promise<ToolCallResult> {
+  const view = String(toolInput["view"] ?? "");
+  const def = INTROSPECTION_QUERIES[view];
+  if (!def) {
+    const available = Object.keys(INTROSPECTION_QUERIES).join(", ");
+    return { ok: false, error: `Unknown view '${view}'. Available: ${available}` };
+  }
+  try {
+    const rows = await query<Record<string, unknown>>(db, def.sql, def.params(toolInput));
+    return { ok: true, result: rows };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `query_db error: ${msg}` };
+  }
+}
+
 export async function executeTool(
   db: D1Database,
   searchConfig: SearchConfig,
   toolName: string,
   toolInput: Record<string, unknown>,
 ): Promise<ToolCallResult> {
+  // ── Internal: agent introspection — bypass tool table lookup ──────────────
+  if (toolName === "query_db") {
+    return executeIntrospection(db, toolInput);
+  }
+
   // ── Load tool ──────────────────────────────────────────────────────────────
   const tool = await queryOne<ToolRow>(
     db,
@@ -109,7 +236,20 @@ async function executeSearXNG(
     engine:      r["engine"]  ?? "",
   }));
 
-  return { ok: true, result: results };
+  return { ok: true, result: truncateResult(results) };
+}
+
+// ── Goose MCP pattern: truncate oversized results to prevent context overflow ──
+// Mirrors block/goose tool_result truncation — large payloads (e.g. full options
+// chains, position dumps) are trimmed before returning to the LLM.
+
+const MAX_RESULT_CHARS = 12_000;
+
+function truncateResult(result: unknown): unknown {
+  const str = typeof result === "string" ? result : JSON.stringify(result);
+  if (str.length <= MAX_RESULT_CHARS) return result;
+  const truncated = str.slice(0, MAX_RESULT_CHARS);
+  return `${truncated}\n… [truncated — ${str.length - MAX_RESULT_CHARS} chars omitted]`;
 }
 
 // ── http_api: POST JSON ────────────────────────────────────────────────────────
@@ -122,16 +262,17 @@ async function executeHttpApi(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
+    signal: AbortSignal.timeout(30_000), // Goose pattern: always timeout tool calls
   });
 
   const text = await res.text();
   if (!res.ok) {
-    return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
+    return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
   }
 
   let parsed: unknown = text;
   try { parsed = JSON.parse(text); } catch { /* return raw text */ }
-  return { ok: true, result: parsed };
+  return { ok: true, result: truncateResult(parsed) };
 }
 
 // ── http_get: GitHub API + OSSInsight + generic GET ──────────────────────────
