@@ -367,7 +367,10 @@ export class AgentActor implements DurableObject {
       : "(no stored memory)";
 
     // Load long-term memories (MemPalace layer — distilled past task summaries)
-    const memories    = await recallMemories(this.env.DB, agentId);
+    // Pass task summary as query → FTS5 relevance match (context-mode pattern):
+    // finance agent asking about GOOGL recalls GOOGL memories, not real estate ones.
+    const rawSummary = (() => { try { return (JSON.parse(task.input) as {summary?:string}).summary ?? ""; } catch { return ""; } })();
+    const memories    = await recallMemories(this.env.DB, agentId, 6, rawSummary);
     const memoriesText = formatMemoriesForPrompt(memories);
 
     // Load default graph (if any)
@@ -503,6 +506,32 @@ export class AgentActor implements DurableObject {
       "UPDATE tasks SET status='completed', output=?, session_id=?, updated_at=? WHERE id=?",
       [outputJson, sessionId, now, taskId],
     );
+
+    // ── Self-critique — Microsoft ai-agents-for-beginners pattern ────────────
+    // Single lightweight LLM call to catch vague/incomplete answers before they
+    // hit Telegram. Only for user-facing, content-heavy task kinds.
+    // ~$0.001 per call (Gemini Flash); adds ~10s; skipped on failure/timeout.
+    const CRITIQUE_KINDS = new Set(["research", "deep_research", "intel_review", "content_generation", "market_research", "intel_check"]);
+    if (task.telegram_chat_id && CRITIQUE_KINDS.has(task.kind) && finalText.length > 200) {
+      try {
+        const rewritten = await this.selfCritique(finalText, task.kind);
+        if (rewritten) {
+          finalText = rewritten;
+          // Update the artifact + task output with the improved text
+          await run(this.env.DB,
+            "UPDATE artifacts SET content=? WHERE id=?",
+            [JSON.stringify({ response: finalText }), artifactId],
+          );
+          await run(this.env.DB,
+            "UPDATE tasks SET output=? WHERE id=?",
+            [JSON.stringify({ summary: finalText.slice(0, 200), artifactIds: [artifactId], critique: "rewritten" }), taskId],
+          );
+        }
+      } catch (critiqueErr) {
+        console.warn(`[AgentActor] Self-critique failed for task ${taskId}:`, critiqueErr);
+        // Never crash — original finalText is used
+      }
+    }
 
     // ── MemPalace: distill task result into long-term memory ──────────────────
     // Skip low-signal task kinds (spawned sub-tasks) to keep memory clean.
@@ -1508,6 +1537,49 @@ export class AgentActor implements DurableObject {
     }
   }
 
+  // ── Self-critique — Microsoft ai-agents-for-beginners pattern ───────────────
+  // One Gemini Flash call reviews the agent's output before it reaches Telegram.
+  // If score < 4 on any dimension, returns the rewritten version; else null.
+  private async selfCritique(originalText: string, taskKind: string): Promise<string | null> {
+    if (!this.env.OPENROUTER_API_KEY) return null;
+
+    const client = new OpenAI({
+      baseURL: OPENROUTER_BASE_URL,
+      apiKey: this.env.OPENROUTER_API_KEY!,
+      defaultHeaders: {
+        "HTTP-Referer": OPENROUTER_APP_URL,
+        "X-Title":      OPENROUTER_APP_NAME,
+      },
+    });
+
+    const response = await client.chat.completions.create({
+      model:       MODELS.GEMINI_FLASH,   // cheap + fast: ~$0.001 per call
+      max_tokens:  1500,
+      temperature: 0.1,
+      messages: [{
+        role:    "user",
+        content: `You are a quality reviewer for an AI agent output. Review the ${taskKind} response below and rate it on:
+1. Completeness (1–5): Does it fully address what was asked?
+2. Accuracy (1–5): Are all stated facts credible and consistent?
+3. Actionability (1–5): Does it give the operator something concrete to act on?
+
+If ALL scores are 4 or higher: respond with exactly the word PASS.
+If ANY score is below 4: respond with REWRITE: followed immediately by an improved version that fixes the weakness. No preamble — just REWRITE: and the improved text.
+
+RESPONSE TO REVIEW:
+${originalText.slice(0, 2500)}`,
+      }],
+      signal: AbortSignal.timeout(25_000),
+    });
+
+    const decision = (response.choices[0]?.message?.content ?? "").trim();
+    if (!decision || decision.startsWith("PASS")) return null;
+    if (decision.startsWith("REWRITE:")) {
+      return decision.slice("REWRITE:".length).trim();
+    }
+    return null;
+  }
+
   private buildSystemPrompt(agent: AgentRow, notesText: string, memoriesText = ""): string {
     return [
       // ── crewAI-style agent identity ─────────────────────────────────────────
@@ -1560,6 +1632,14 @@ export class AgentActor implements DurableObject {
       "  • If you are NOT recommending an actionable trade (analysis only), omit the ##TRADE_ORDER## block entirely.",
       "- Keep agent coordination details OUT of result messages — results only, no 'routing to X' or 'handoff to Y' commentary.",
       "",
+      // ── Chain-of-thought scaffolding for finance domain (Lordog/dive-into-llms pattern) ──
+      // Structured reasoning traces catch errors like recommending a roll on an expired contract.
+      agent.domain === "execution_finance" ? "CHAIN-OF-THOUGHT (finance domain — required for trade decisions):" : null,
+      agent.domain === "execution_finance" ? "For every options decision, show this exact trace on its own line before the recommendation:" : null,
+      agent.domain === "execution_finance" ? "  CoT: Position=[symbol/strike/expiry] → Mark=[current] vs Entry=[entry] → P&L=[%] → DTE=[N] → Rule=[stop/target/hold/expiry] → Decision=[CLOSE/ROLL/HOLD]" : null,
+      agent.domain === "execution_finance" ? "Example: CoT: GOOGL 340C Apr27 → Mark=$1.10 vs Entry=$0.60 → P&L=+83% → DTE=4 → Rule=hold(target=180%) → Decision=HOLD" : null,
+      agent.domain === "execution_finance" ? "This trace is mandatory — it makes your reasoning auditable and catches stale data errors." : null,
+      agent.domain === "execution_finance" ? "" : null,
       "CONTENT RULES:",
       "- Give the direct answer FIRST. Never open with disclaimers or 'I cannot...'.",
       "- If real-time data is unavailable, state the best available estimate + source.",

@@ -80,14 +80,51 @@ export async function storeMemory(
 }
 
 // ── Recall memories ───────────────────────────────────────────────────────────
-// Returns the top-N most important/recent memories for an agent.
-// Future: replace with Vectorize ANN search on embedded summary text.
+// With taskQuery: FTS5 BM25 relevance match — returns memories semantically
+//   relevant to the current task (context-mode pattern from mksglu/context-mode).
+//   Finance agent asking about GOOGL recalls GOOGL memories, not real estate ones.
+// Without taskQuery: falls back to importance+recency sort.
 
 export async function recallMemories(
   db: D1Database,
   agentId: string,
   limit = RECALL_LIMIT,
+  taskQuery?: string,
 ): Promise<Memory[]> {
+  if (taskQuery && taskQuery.trim().length > 3) {
+    // Sanitise: strip FTS5 special chars to avoid query parse errors
+    const safeQuery = taskQuery
+      .replace(/["""''()^*:]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .split(" ")
+      .filter((w) => w.length > 2)
+      .slice(0, 8)                   // cap at 8 terms to keep query lean
+      .join(" OR ");                 // OR logic = broader relevance match
+
+    if (safeQuery) {
+      try {
+        const results = await query<Memory>(
+          db,
+          `SELECT m.id, m.agent_id, m.summary, m.source_kind, m.task_id,
+                  m.importance, m.tags, m.created_at
+           FROM agent_memories_fts fts
+           JOIN agent_memories m ON m.rowid = fts.rowid
+           WHERE agent_memories_fts MATCH ?
+             AND m.agent_id = ?
+           ORDER BY rank, m.importance DESC
+           LIMIT ?`,
+          [safeQuery, agentId, limit],
+        );
+        // Fall through to recency sort if FTS returns nothing
+        if (results.length > 0) return results;
+      } catch {
+        // FTS5 query syntax error or missing table — silently fall through
+      }
+    }
+  }
+
+  // Fallback: importance + recency (original behaviour)
   return query<Memory>(
     db,
     `SELECT id, agent_id, summary, source_kind, task_id, importance, tags, created_at
