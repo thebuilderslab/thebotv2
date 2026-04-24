@@ -152,11 +152,43 @@ telegramRouter.post("/telegram/webhook", async (c) => {
         };
         const agentId = agentMap[teamId] ?? "agent-research-lead";
 
+        // Build task details — code_change needs explicit tool-use instructions
+        // (blank details = model responds with text instead of calling tools)
+        let taskDetails = "";
+        if (kind === "code_change") {
+          taskDetails = `You are agent-build-lead. OPERATOR REQUEST: "${text}"
+
+You MUST call the tools below in order. Do NOT describe what you will do — execute it.
+
+STEP 1 — CALL read_github_file
+Choose the most relevant file for this change:
+  • Morning brief / scheduled output → packages/backend-api/src/scheduled.ts
+  • Telegram routing, formatting, buttons → packages/backend-api/src/routes/telegram.ts
+  • Agent behavior, system prompt → packages/backend-api/src/actors/AgentActor.ts
+  • Query classifier / team routing → packages/backend-api/src/services/query-classifier.ts
+Call: read_github_file({ path: "<chosen file>" })
+
+STEP 2 — LOCATE THE CHANGE
+Read the file content returned. Find the exact function, template string, or variable that controls what the operator described.
+
+STEP 3 — GENERATE MODIFIED FILE
+Produce the complete updated file content with the change applied. This is NOT a diff — the full file.
+
+STEP 4 — CALL submit_code_change
+Call: submit_code_change({
+  files: [{ path: "<same path as step 1>", content: "<complete updated file>" }],
+  commit_message: "<imperative verb, under 72 chars, e.g. 'fix morning brief to bold P&L'>",
+  change_summary: "<plain English: which function/line you changed and exactly how — shown to operator before deploy>"
+})
+
+YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to the operator for approval.`;
+        }
+
         // Store task in D1 with telegram_chat_id so results come back
         await run(env.DB,
           `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, telegram_chat_id, created_at, updated_at)
            VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
-          [taskId, kind, agentId, teamId, JSON.stringify({ summary: text, details: "" }), chatId, now, now],
+          [taskId, kind, agentId, teamId, JSON.stringify({ summary: text, details: taskDetails }), chatId, now, now],
         );
 
         // Update the in-log with route info
@@ -701,6 +733,18 @@ async function handleCallbackQuery(
       await handleProposalsCommand(chatId, env);
     } else if (action === "view_stats") {
       await handleStatsCommand(chatId, env);
+    } else if (action === "view_directives") {
+      await sendMessage(env, chatId,
+        `📜 <b>BOT NATION — MISSION &amp; DIRECTIVES</b>\n\n` +
+        `<b>MISSION:</b>\n<i>An autonomous AI workforce that monitors markets, learns from operator feedback, and executes continuously improving operations — with the operator as the approving authority, never the bottleneck.</i>\n\n` +
+        `<b>TEAM-FINANCE</b>\nGenerate, monitor, and execute options strategies on held positions only. All trades require one-tap approval. Self-improve stop/target rules through outcome tracking.\n\n` +
+        `<b>TEAM-INTEL</b>\nScan for threats and opportunities in AI, DeFi, and open-source. Every scan ends with a self-learning prompt. Integrate promising repos within 48h of discovery.\n\n` +
+        `<b>TEAM-RESEARCH</b>\nSynthesize intelligence into actionable briefs. Monitor reply quality weekly. Maintain the skill library. Surface evolutionary paths.\n\n` +
+        `<b>TEAM-BUILD</b>\nExecute operator-approved code changes. All changes require preview + approval before deploy. Every deploy is logged and reversible.\n\n` +
+        `<b>TEAM-INFRA</b>\nMonitor system health, agent performance, and response gaps. Alert when any agent goes silent for &gt;4h during market hours.\n\n` +
+        `<b>TEAM-GROWTH</b>\nIdentify expansion opportunities — new data sources, API integrations, agent capabilities. Propose 1 expansion per week.\n\n` +
+        `<i>Reviewed every Sunday 10pm ET. Reply "update [team] [new directive clause]" to evolve a directive.</i>`
+      );
     }
     await answerCallback(env, cbq.id, "✅");
     return;

@@ -307,6 +307,63 @@ EXIT RULES for each open position: Close if mark hits $X.XX. Roll if mark hits $
     teamId: "team-finance",
   },
 
+  // 10:00pm ET Sunday (02:00 UTC Monday) — Weekly Mission & Directives Review
+  // agent-research-lead synthesizes last-7-day performance trends and asks operator
+  // which department directive to update, then spawns a proposal for each chosen update.
+  "0 2 * * 1": {
+    kind: "research",
+    summary: "Weekly mission & directives review",
+    details: `You are agent-research-lead. Every Sunday night you audit Bot Nation's performance against its mission and department directives, then ask the operator what to update.
+
+## BOT NATION MISSION
+"An autonomous AI workforce that monitors markets, learns from operator feedback, and executes continuously improving operations — with the operator as the approving authority, never the bottleneck."
+
+## DEPARTMENT DIRECTIVES
+TEAM-FINANCE: Generate, monitor, and execute options strategies on held positions only. All trades require one-tap approval. Self-improve stop/target rules through outcome tracking.
+TEAM-INTEL: Scan for threats and opportunities in AI, DeFi, and open-source. Every scan ends with a self-learning prompt. Integrate promising repos within 48h of discovery.
+TEAM-RESEARCH: Synthesize intelligence into actionable briefs. Monitor reply quality weekly. Maintain the skill library. Surface evolutionary paths.
+TEAM-BUILD: Execute operator-approved code changes. All changes require preview + approval before deploy. Every deploy is logged and reversible.
+TEAM-INFRA: Monitor system health, agent performance, and response gaps. Alert when any agent goes silent for >4h during market hours.
+TEAM-GROWTH: Identify expansion opportunities — new data sources, API integrations, agent capabilities. Propose 1 expansion per week.
+
+## YOUR TASK
+STEP 1 — LOAD LAST-7-DAY DATA
+Call query_db with:
+  • view "recent_messages" — what topics were most common? any recurring failures?
+  • view "message_quality" — which route types are underperforming?
+  • view "recent_failures" — any systemic failures this week?
+  • view "agents" — are all 6 core agents active?
+
+STEP 2 — SCORE EACH DEPARTMENT (0–10)
+Rate each team against its directive based on the data:
+  TEAM-FINANCE: Did it generate accurate briefs? Correct position analysis? Any missed alerts?
+  TEAM-INTEL: Did it surface relevant repos/threats? Did the self-learning prompts get responses?
+  TEAM-RESEARCH: Digest quality? Classifier routing accuracy from message_quality?
+  TEAM-BUILD: Were code changes complete? Did the pipeline work end-to-end?
+  TEAM-INFRA: Were gaps detected? Were failures surfaced promptly?
+  TEAM-GROWTH: Was 1 expansion proposal made this week?
+
+STEP 3 — IDENTIFY TOP EVOLUTION PATHS
+Based on the scores, identify 2 areas where the directive itself should evolve (not just execution, but the directive's goal). Examples:
+  • TEAM-FINANCE directive could add: "Track trade outcomes and adjust stop% based on win rate"
+  • TEAM-BUILD directive could add: "Before any change, check git log for recent similar changes to avoid duplication"
+
+STEP 4 — ASK OPERATOR WHAT TO UPDATE
+End your output with this exact section:
+
+## 📋 DIRECTIVE UPDATE CHECK
+Scores: FINANCE:[X] INTEL:[X] RESEARCH:[X] BUILD:[X] INFRA:[X] GROWTH:[X]
+
+Top 2 evolution suggestions:
+1. [team]: [proposed directive addition]
+2. [team]: [proposed directive addition]
+
+Which directive would you like to update this week? Reply with the team name and your instruction.
+(Or reply "skip" to keep all directives as-is)`,
+    agentId: "agent-research-lead",
+    teamId: "team-research",
+  },
+
   // 9:00pm ET Sunday (01:00 UTC Monday) — Weekly Telegram Quality Review
   // agent-research-lead reviews the past week of messages and proposes routing improvements
   "0 1 * * 1": {
@@ -676,8 +733,10 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
   if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_CHAT_ID) return;
 
   const cutoff4h  = new Date(Date.now() - 4  * 60 * 60 * 1000).toISOString();
+  const cutoff5m  = new Date(Date.now() - 5  * 60 * 1000).toISOString();
 
-  const [completed, failed, activeAgents, agentsWithWork, pendingProposals, activeCrons, health] =
+  const [completed, failed, activeAgents, agentsWithWork, pendingProposals, activeCrons, health,
+         unanswered, pendingApprovals] =
     await Promise.all([
       query<{ kind: string; duration: number }>(env.DB,
         `SELECT kind,
@@ -708,6 +767,30 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
         completed_last_4h: number; failed_last_4h: number;
         active_agents: number; pending_proposals: number; active_crons: number;
       }>(env.DB, `SELECT * FROM system_health`, []),
+
+      // ── Gap detection: inbound messages with no reply in 5+ min ─────────────
+      // A "gap" is a user message (direction='in') where no outbound message
+      // was logged for the same chat within the next 5 minutes.
+      query<{ text: string; created_at: string }>(env.DB,
+        `SELECT i.text, i.created_at
+         FROM telegram_messages i
+         WHERE i.direction = 'in'
+           AND i.created_at > ?
+           AND i.created_at < ?
+           AND NOT EXISTS (
+             SELECT 1 FROM telegram_messages o
+             WHERE o.direction = 'out'
+               AND o.created_at > i.created_at
+               AND o.created_at < datetime(i.created_at, '+5 minutes')
+           )
+         ORDER BY i.created_at DESC LIMIT 5`,
+        [cutoff4h, cutoff5m]),
+
+      // ── Pending code change approvals ─────────────────────────────────────
+      query<{ id: string; commit_message: string; created_at: string }>(env.DB,
+        `SELECT id, commit_message, created_at FROM code_changes
+         WHERE status='pending_approval' ORDER BY created_at DESC LIMIT 3`,
+        []),
     ]);
 
   const timeLabel = new Date().toUTCString().replace(" GMT", " UTC");
@@ -735,23 +818,42 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
     ? activeCrons.map((c) => `  ├─ ${c.cron_expression} → ${c.task_kind}`).join("\n")
     : "  └─ None (/propose cron_request to add one)";
 
+  // ── Gap alert section ────────────────────────────────────────────────────
+  const gapSection = unanswered.length > 0
+    ? `\n⚠️ <b>UNANSWERED QUERIES (${unanswered.length}):</b>\n` +
+      unanswered.map((u) => {
+        const age = Math.round((Date.now() - new Date(u.created_at).getTime()) / 60000);
+        return `  ├─ "${u.text.slice(0, 60)}" [${age}m ago]`;
+      }).join("\n") + "\n"
+    : "";
+
+  // ── Pending approvals section ─────────────────────────────────────────────
+  const approvalSection = pendingApprovals.length > 0
+    ? `\n🔍 <b>AWAITING YOUR APPROVAL (${pendingApprovals.length}):</b>\n` +
+      pendingApprovals.map((a) => {
+        const age = Math.round((Date.now() - new Date(a.created_at).getTime()) / 60000);
+        return `  ├─ "${a.commit_message.slice(0, 50)}" [${age}m ago]`;
+      }).join("\n") +
+      `\n  └─ Tap ✅ Deploy / ❌ Cancel in the preview message above\n`
+    : "";
+
   const message =
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🏛 <b>SUPERVISOR REMINDER</b>\n` +
+    `🏛 <b>BOT NATION — SUPERVISOR</b>\n` +
     `${timeLabel}\n` +
+    `<i>Mission: Autonomous ops. Operator approves, never bottlenecks.</i>\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    gapSection +
+    approvalSection +
     `✅ <b>COMPLETED (last 4h):</b>\n${completedList}\n\n` +
     `❌ <b>FAILED:</b>\n${failedList}\n\n` +
     `📋 <b>PENDING PROPOSALS:</b>\n${proposalList}\n\n` +
-    `🕐 <b>ACTIVE CRONS:</b>\n${cronList}\n\n` +
     `🤖 <b>IDLE AGENTS:</b>\n${idleList}\n\n` +
     `📊 <b>SYSTEM:</b>\n` +
     `  Pending: ${health?.pending_tasks ?? 0} · Running: ${health?.running_tasks ?? 0}\n` +
-    `  Active agents: ${health?.active_agents ?? 0} · Active crons: ${health?.active_crons ?? 0}\n\n` +
+    `  Active agents: ${health?.active_agents ?? 0} · Crons: ${health?.active_crons ?? 0}\n\n` +
     `⏳ <b>ACTIONS:</b>\n` +
-    `  /proposals — review pending\n` +
-    `  /stats — full dashboard\n` +
-    `  /propose cron_request — schedule new cron\n` +
+    `  /proposals · /stats · /agents · /help\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
   await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
@@ -763,8 +865,9 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [[
-          { text: "📋 View Proposals", callback_data: "remind_view_proposals" },
-          { text: "📊 Stats",          callback_data: "remind_view_stats" },
+          { text: "📋 Proposals",       callback_data: "remind_view_proposals" },
+          { text: "📊 Stats",           callback_data: "remind_view_stats" },
+          { text: "📜 Directives",      callback_data: "remind_view_directives" },
         ]],
       },
     }),
@@ -776,6 +879,8 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
     failedCount: failed.length,
     pendingProposals: pendingProposals.length,
     idleAgents: agentsWithoutWork.length,
+    unansweredGaps: unanswered.length,
+    pendingApprovals: pendingApprovals.length,
   }, null, now);
 }
 

@@ -792,12 +792,19 @@ export class AgentActor implements DurableObject {
       // ── Guardrail 5: Loop iteration cap ─────────────────────────────────────
       while (iterations < MAX_LOOP_ITERATIONS) {
         iterations++;
+        // Force a tool call on the first iteration of code_change tasks —
+        // without this, models tend to describe the change in text instead of calling tools.
+        const toolChoice =
+          openaiTools.length > 0 && task.kind === "code_change" && iterations === 1
+            ? ("required" as const)
+            : ("auto" as const);
+
         const response = await client.chat.completions.create({
           model: modelConfig.model,
           max_tokens: modelConfig.maxTokens,
           temperature: modelConfig.temperature,
           messages: [{ role: "system", content: systemPrompt }, ...messages],
-          ...(openaiTools.length > 0 ? { tools: openaiTools } : {}),
+          ...(openaiTools.length > 0 ? { tools: openaiTools, tool_choice: toolChoice } : {}),
         });
 
         const choice = response.choices[0];

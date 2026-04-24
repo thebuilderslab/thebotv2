@@ -49,6 +49,8 @@
       "0 0 * * 1",
       // Weekly Telegram quality review — Sunday 9pm ET (Monday 01:00 UTC)
       "0 1 * * 1",
+      // Weekly mission & directives review — Sunday 10pm ET (Monday 02:00 UTC)
+      "0 2 * * 1",
       // Position exit monitor — 3:00pm ET weekdays (19:00 UTC), 60 min before close
       "0 19 * * 1-5"
     ]
