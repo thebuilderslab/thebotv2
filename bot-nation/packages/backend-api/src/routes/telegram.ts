@@ -141,7 +141,7 @@ telegramRouter.post("/telegram/webhook", async (c) => {
         const teamId = classification.suggestedTeam ?? "team-research";
         const kind = classification.suggestedTaskKind ?? "research";
 
-        // Resolve agent from team
+        // Resolve agent from team — all 9 teams covered
         const agentMap: Record<string, string> = {
           "team-finance":  "agent-finance-lead",
           "team-research": "agent-research-lead",
@@ -149,6 +149,9 @@ telegramRouter.post("/telegram/webhook", async (c) => {
           "team-build":    "agent-build-lead",
           "team-growth":   "agent-growth-lead",
           "team-infra":    "agent-infra-lead",
+          "team-bailey":   "agent-bailey-lead",    // real estate lead pipeline
+          "team-agency":   "agent-agency-growthops", // growth/revops/demand gen
+          "team-p87":      "agent-p87-planner",    // DeFi/Web3 execution
         };
         const agentId = agentMap[teamId] ?? "agent-research-lead";
 
@@ -735,15 +738,18 @@ async function handleCallbackQuery(
       await handleStatsCommand(chatId, env);
     } else if (action === "view_directives") {
       await sendMessage(env, chatId,
-        `📜 <b>BOT NATION — MISSION &amp; DIRECTIVES</b>\n\n` +
+        `📜 <b>BOT NATION — MISSION &amp; DIRECTIVES (9 TEAMS)</b>\n\n` +
         `<b>MISSION:</b>\n<i>An autonomous AI workforce that monitors markets, learns from operator feedback, and executes continuously improving operations — with the operator as the approving authority, never the bottleneck.</i>\n\n` +
-        `<b>TEAM-FINANCE</b>\nGenerate, monitor, and execute options strategies on held positions only. All trades require one-tap approval. Self-improve stop/target rules through outcome tracking.\n\n` +
-        `<b>TEAM-INTEL</b>\nScan for threats and opportunities in AI, DeFi, and open-source. Every scan ends with a self-learning prompt. Integrate promising repos within 48h of discovery.\n\n` +
-        `<b>TEAM-RESEARCH</b>\nSynthesize intelligence into actionable briefs. Monitor reply quality weekly. Maintain the skill library. Surface evolutionary paths.\n\n` +
-        `<b>TEAM-BUILD</b>\nExecute operator-approved code changes. All changes require preview + approval before deploy. Every deploy is logged and reversible.\n\n` +
-        `<b>TEAM-INFRA</b>\nMonitor system health, agent performance, and response gaps. Alert when any agent goes silent for &gt;4h during market hours.\n\n` +
-        `<b>TEAM-GROWTH</b>\nIdentify expansion opportunities — new data sources, API integrations, agent capabilities. Propose 1 expansion per week.\n\n` +
-        `<i>Reviewed every Sunday 10pm ET. Reply "update [team] [new directive clause]" to evolve a directive.</i>`
+        `<b>TEAM-FINANCE</b> · agent-finance-lead\nOptions strategies on held positions. All trades require one-tap approval. Self-improve stop/target % through outcome tracking.\n\n` +
+        `<b>TEAM-INTEL</b> · agent-intel-lead\nScan for threats in AI/DeFi/open-source. Every scan ends with a self-learning prompt. Evaluate repos within 48h.\n\n` +
+        `<b>TEAM-RESEARCH</b> · agent-research-lead\nSynthesize intelligence into briefs. Own quality review + skill library + Sunday mission review.\n\n` +
+        `<b>TEAM-BUILD</b> · agent-build-lead\nExecute operator-approved code changes. Always preview → approve → deploy. All changes git-logged.\n\n` +
+        `<b>TEAM-INFRA</b> · agent-infra-lead\nMonitor system health + response gaps. Alert on silent agents. Propose self-healing for recurring failures.\n\n` +
+        `<b>TEAM-GROWTH</b> · agent-growth-lead\n1 expansion proposal per week. Source from intel_interests + YouTube intel + operator patterns.\n\n` +
+        `<b>TEAM-BAILEY</b> · agent-bailey-lead\nPropStream → voice call → property tour → human handoff pipeline. Score and qualify real estate leads. CRM hygiene.\n\n` +
+        `<b>TEAM-AGENCY</b> · agent-agency-growthops\nDemand gen, inbound signals, campaigns, pipeline ops. Turn market context into audience experiments.\n\n` +
+        `<b>TEAM-P87</b> · agent-p87-planner\nDeFi/Web3 execution. mock→testnet→mainnet_canary→mainnet_full mode ladder. Human approval required before any mainnet step.\n\n` +
+        `<i>Reviewed every Sunday 10pm ET. Reply "update [team] [new directive clause]" to evolve.</i>`
       );
     }
     await answerCallback(env, cbq.id, "✅");

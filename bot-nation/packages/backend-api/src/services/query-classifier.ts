@@ -289,17 +289,33 @@ function checkPatterns(text: string, patterns: RegExp[]): number {
  * Suggest team based on action keywords
  */
 function suggestTeamFromAction(text: string): string | undefined {
-  // Finance / trading always wins if any trading keyword present
+  // ── projecT87 — DeFi/Web3 execution (check BEFORE generic finance) ─────────
+  if (/\b(defi|web3|blockchain|smart.?contract|mainnet|testnet|rpc|on.?chain|gas fee|solidity|p87|project.?87|liquidity pool|dex|swap|stake|yield|protocol|token (launch|deploy|transfer)|wallet (address|balance|connect))\b/i.test(text)) {
+    return 'team-p87';
+  }
+
+  // ── Bailey Group — real estate lead pipeline ───────────────────────────────
+  if (/\b(propstream|real estate|property|properties|landlord|tenant|lead (score|qualify|call|list)|voice call|crm (update|note|contact)|skip trace|property tour|listing|motivated seller|foreclosure|bail(ey|ey group))\b/i.test(text)) {
+    return 'team-bailey';
+  }
+
+  // ── The Agency — growth/revops/demand gen ─────────────────────────────────
+  if (/\b(growthops|revops|pipelineops|demand gen|inbound (lead|signal|funnel)|outbound (sequence|campaign)|lead generation|sales funnel|drip campaign|agency (pipeline|client|campaign))\b/i.test(text)) {
+    return 'team-agency';
+  }
+
+  // ── Finance / trading — options + Schwab positions ───────────────────────
   if (/\b(call|put|roll|strike|dte|theta|delta|gamma|options|position|portfolio|chart|signal|setup|trade|trading|spy|spx|tsla|googl|aapl|nvda|thinkorswim|tos|schwab|breakeven|expir|intraday|swing|premarket|vix|rsi|macd|support|resistance|breakout|p&l|pnl|credit|debit|premium)\b/i.test(text)) {
     return 'team-finance';
   }
+
   if (/\b(build|code|develop|write|implement|fix|refactor)\b/i.test(text)) {
     return 'team-build';
   }
   if (/\b(deploy|configure|infrastructure|setup|monitor)\b/i.test(text)) {
     return 'team-infra';
   }
-  if (/\b(wallet|finance|financial|simulate|market|defi)\b/i.test(text)) {
+  if (/\b(wallet|finance|financial|simulate|market)\b/i.test(text)) {
     return 'team-finance';
   }
   if (/\b(marketing|campaign|content|growth|audience)\b/i.test(text)) {
@@ -321,6 +337,18 @@ function suggestTaskKindFromAction(text: string): string | undefined {
   if (/\b(deep research|thorough|comprehensive|investigation)\b/i.test(text)) {
     return 'deep_research';
   }
+  // DeFi/Web3 execution (projecT87 domain)
+  if (/\b(defi|web3|blockchain|smart.?contract|mainnet|testnet|on.?chain|p87|project.?87|liquidity|dex|swap|stake)\b/i.test(text)) {
+    return 'defi_plan';
+  }
+  // Bailey lead pipeline
+  if (/\b(propstream|lead score|lead qualify|voice call|property tour|real estate lead|motivated seller)\b/i.test(text)) {
+    return 'lead_qualification';
+  }
+  // Agency growth operations
+  if (/\b(campaign|demand gen|inbound funnel|outbound sequence|growthops|revops)\b/i.test(text)) {
+    return 'campaign_generation';
+  }
   if (/\b(research|investigate|analyze|find|discover)\b/i.test(text)) {
     return 'research';
   }
@@ -341,9 +369,6 @@ function suggestTaskKindFromAction(text: string): string | undefined {
   }
   if (/\b(market|trend|research|growth)\b/i.test(text)) {
     return 'market_research';
-  }
-  if (/\b(call|contact|lead|qualify|sales)\b/i.test(text)) {
-    return 'lead_qualification';
   }
   return undefined;
 }

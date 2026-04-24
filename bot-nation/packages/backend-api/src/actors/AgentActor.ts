@@ -1567,7 +1567,7 @@ export class AgentActor implements DurableObject {
       "- 'petition' in a finance context means 'position' (speech-to-text artifact) — handle accordingly.",
       "- To spawn parallel sub-tasks: <SPAWN_TASKS>[{\"kind\":\"research\",\"summary\":\"...\"}]</SPAWN_TASKS>",
       "- To hand off entirely to a peer agent (Swarm protocol): <HANDOFF to=\"agent-id\">context for them</HANDOFF>",
-      "  Valid handoff targets: agent-finance-lead | agent-research-lead | agent-intel-lead | agent-build-lead | agent-growth-lead | agent-infra-lead",
+      "  Valid handoff targets: agent-finance-lead | agent-research-lead | agent-intel-lead | agent-build-lead | agent-growth-lead | agent-infra-lead | agent-bailey-lead | agent-agency-growthops | agent-p87-planner",
       "  Use HANDOFF when the task is OUTSIDE your domain. Use SPAWN_TASKS when you need help but stay in control.",
       "",
       "INTROSPECTION TOOL — query_db:",

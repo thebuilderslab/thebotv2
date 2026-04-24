@@ -342,6 +342,9 @@ Rate each team against its directive based on the data:
   TEAM-BUILD: Were code changes complete? Did the pipeline work end-to-end?
   TEAM-INFRA: Were gaps detected? Were failures surfaced promptly?
   TEAM-GROWTH: Was 1 expansion proposal made this week?
+  TEAM-BAILEY: Were real estate leads scored and voice calls initiated? CRM notes updated?
+  TEAM-AGENCY: Were any campaigns or demand-gen pipelines active? Inbound signals captured?
+  TEAM-P87: Were DeFi tasks scoped with mode ladder? Any mainnet approvals handled correctly?
 
 STEP 3 — IDENTIFY TOP EVOLUTION PATHS
 Based on the scores, identify 2 areas where the directive itself should evolve (not just execution, but the directive's goal). Examples:
@@ -352,7 +355,7 @@ STEP 4 — ASK OPERATOR WHAT TO UPDATE
 End your output with this exact section:
 
 ## 📋 DIRECTIVE UPDATE CHECK
-Scores: FINANCE:[X] INTEL:[X] RESEARCH:[X] BUILD:[X] INFRA:[X] GROWTH:[X]
+Scores: FINANCE:[X] INTEL:[X] RESEARCH:[X] BUILD:[X] INFRA:[X] GROWTH:[X] BAILEY:[X] AGENCY:[X] P87:[X]
 
 Top 2 evolution suggestions:
 1. [team]: [proposed directive addition]
