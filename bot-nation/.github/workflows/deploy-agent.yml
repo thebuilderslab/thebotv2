@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: packages/backend-api/package-lock.json
+          cache-dependency-path: bot-nation/packages/backend-api/package-lock.json
 
       # ── 3. Fetch change from Worker API ──────────────────────────────────────
       - name: Fetch change details
@@ -86,7 +86,7 @@ jobs:
 
       # ── 5. Install deps ───────────────────────────────────────────────────────
       - name: Install dependencies
-        working-directory: packages/backend-api
+        working-directory: bot-nation/packages/backend-api
         run: npm ci --prefer-offline
 
       # ── 6. Deploy to Cloudflare Workers ──────────────────────────────────────
@@ -95,7 +95,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: packages/backend-api
+          workingDirectory: bot-nation/packages/backend-api
           command: deploy
 
       # ── 7. Commit and push the change ─────────────────────────────────────────
