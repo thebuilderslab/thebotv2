@@ -66,5 +66,17 @@ publicRoutes.get('/_admin/assets/*', async (c) => {
   const assetUrl = new URL(assetPath, url.origin);
   return c.env.ASSETS.fetch(new Request(assetUrl.toString(), c.req.raw));
 });
-
+// POST /telegram - Telegram webhook (must be public, CF Access would block Telegram's servers)
+publicRoutes.post('/telegram', async (c) => {
+  const sandbox = c.get('sandbox');
+  const request = c.req.raw;
+  const { ensureMoltbotGateway } = await import('../gateway');
+  await ensureMoltbotGateway(sandbox, c.env);
+  const url = new URL(request.url);
+  if (c.env.MOLTBOT_GATEWAY_TOKEN && !url.searchParams.has('token')) {
+    url.searchParams.set('token', c.env.MOLTBOT_GATEWAY_TOKEN);
+  }
+  const response = await sandbox.containerFetch(new Request(url.toString(), request), 18789);
+  return response;
+});
 export { publicRoutes };

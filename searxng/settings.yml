@@ -1,0 +1,54 @@
+general:
+  instance_name: "Bot Nation Search"
+  debug: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  # json format MUST be listed here — this is what tool-executor.ts calls
+  formats:
+    - html
+    - json
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  # SEARXNG_SECRET_KEY env var overrides this at container startup
+  secret_key: "bot-nation-searxng-2026-xk92mf7pqz"
+  public_instance: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+  default_theme: simple
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+    timeout: 6.0
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+    timeout: 6.0
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    timeout: 6.0
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+    timeout: 4.0
+
+outgoing:
+  request_timeout: 8.0
+  pool_connections: 100
+  pool_maxsize: 20

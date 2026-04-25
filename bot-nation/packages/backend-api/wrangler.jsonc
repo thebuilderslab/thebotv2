@@ -1,0 +1,73 @@
+﻿{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bot-nation-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pbot-nation-db",
+      "database_id": "53800135-51c4-459f-837e-2606b4431762",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AGENT_ACTOR",
+        "class_name": "AgentActor"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["AgentActor"]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/5 * * * *",
+      "15 12 * * *",
+      "30 12 * * 1-5",
+      "0 15 * * *",
+      "30 18 * * 1-5",
+      "30 20 * * 1-5",
+      "0 12 * * 1",
+      "0 12 * * 3",
+      "*/5 13-20 * * 1-5",
+      // Daily price targets at 9:30am ET (13:30 UTC) on weekdays
+      "30 13 * * 1-5",
+      // Supervisor 4-hour reminders: 6am, 10am, 2pm, 6pm, 10pm, 2am UTC
+      // (covers EDT: 2am, 6am, 10am, 2pm, 6pm, 10pm)
+      "0 6,10,14,18,22,2 * * *",
+      // Weekly YouTube market intelligence — Monday 11pm ET (Tuesday 04:00 UTC)
+      "0 4 * * 2",
+      // Weekly trade planning session — Sunday 8pm ET (Monday 00:00 UTC)
+      "0 0 * * 1",
+      // Weekly Telegram quality review — Sunday 9pm ET (Monday 01:00 UTC)
+      "0 1 * * 1",
+      // Weekly mission & directives review — Sunday 10pm ET (Monday 02:00 UTC)
+      "0 2 * * 1",
+      // Position exit monitor — 3:00pm ET weekdays (19:00 UTC), 60 min before close
+      "0 19 * * 1-5"
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    // Set this to your SearXNG instance URL after deploying to Railway/Render/Fly.io.
+    // No API key needed — SearXNG is self-hosted and open.
+    // Example: "https://my-searxng.up.railway.app"
+    "SEARXNG_BASE_URL": "https://thebotv2-t0ik.onrender.com",
+    "LAST30DAYS_URL": "https://last30days-api.onrender.com",
+    "HERMES_API_URL": "https://hermes-api-minimal.onrender.com",
+    "AUTORESEARCHCLAW_URL": "https://autoresearchclaw-api.onrender.com",
+    "TRADING_URL": "https://tradingagents-api-q747.onrender.com",
+    // thinkorswim integration — set TWS_API_KEY as a wrangler secret
+    "TWS_WEBHOOK_SECRET": ""
+  }
+}
