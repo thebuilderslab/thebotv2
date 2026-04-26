@@ -138,6 +138,13 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{\"chat_id\":\"${{ github.event.client_payload.chat_id }}\",\"text\":\"$MSG\",\"parse_mode\":\"HTML\"}"
 
+          # Log outbound for supervisor gap-detection
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-deploy-secret: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
+            -d "{\"chat_id\":\"${{ github.event.client_payload.chat_id }}\",\"text\":\"Deploy complete: ${{ github.event.client_payload.commit_message }}\",\"task_id\":\"${{ github.event.client_payload.task_id }}\",\"route_type\":\"deploy_success\"}" \
+            "https://bot-nation-api.thejamalshackleford.workers.dev/api/build/log-outbound" || true
+
       # ── 10. Notify Telegram — failure ────────────────────────────────────────
       - name: Telegram failure
         if: failure()
@@ -149,3 +156,9 @@ jobs:
           curl -s "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "{\"chat_id\":\"${{ github.event.client_payload.chat_id }}\",\"text\":\"$MSG\",\"parse_mode\":\"HTML\"}"
+
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-deploy-secret: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
+            -d "{\"chat_id\":\"${{ github.event.client_payload.chat_id }}\",\"text\":\"Deploy failed: ${{ github.event.client_payload.commit_message }}\",\"task_id\":\"${{ github.event.client_payload.task_id }}\",\"route_type\":\"deploy_failure\"}" \
+            "https://bot-nation-api.thejamalshackleford.workers.dev/api/build/log-outbound" || true
