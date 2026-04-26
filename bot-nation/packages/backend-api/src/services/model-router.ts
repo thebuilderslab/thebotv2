@@ -60,9 +60,9 @@ const KIND_MODEL_MAP: Record<string, ModelConfig> = {
     temperature: 0.9,
   },
   code_change: {
-    model: MODELS.QWEN_397B,     // strong tool-use + code gen, 256K context
-    fallback: MODELS.KIMI_K2_5,  // fallback: also excellent at agentic code tasks
-    maxTokens: 4096,              // files can be large; 1024 was too small
+    model: MODELS.KIMI_K2_5,    // agentic tool-calling; Qwen3-397B ignores tool_choice:"required"
+    fallback: MODELS.QWEN_397B, // fallback: code gen strength if Kimi unavailable
+    maxTokens: 16384,            // full-file rewrites: telegram.ts ~2155 lines needs >10k tokens; 4096 truncated submit_code_change tool_use mid-generation
     temperature: 0.2,
   },
   config_change: {
@@ -203,8 +203,22 @@ const DEFAULT_CONFIG: ModelConfig = {
 
 // ── Main resolver ─────────────────────────────────────────────────────────────
 
+// Tool-calling-critical kinds — domain override MUST NOT swap the model.
+// These kinds depend on a model that respects tool_choice:"required" (Kimi K2.5).
+// GLM-5 / Qwen3-397B / Gemini-Flash drop tool calls and emit text instead, breaking the pipeline.
+const TOOL_CRITICAL_KINDS = new Set([
+  "code_change",
+  "config_change",
+  "intel_review",
+]);
+
 export function resolveModel(taskKind: string, agentDomain?: string | null): ModelConfig {
   const kindConfig = KIND_MODEL_MAP[taskKind] ?? { ...DEFAULT_CONFIG };
+
+  // Tool-critical kinds always use the kind's configured model — domain cannot override.
+  if (TOOL_CRITICAL_KINDS.has(taskKind)) {
+    return kindConfig;
+  }
 
   // Domain can override the model but keeps kind-level maxTokens + temperature
   if (agentDomain && DOMAIN_MODEL_OVERRIDE[agentDomain]) {
