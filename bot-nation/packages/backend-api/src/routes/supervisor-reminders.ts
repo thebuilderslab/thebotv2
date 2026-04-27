@@ -11,6 +11,7 @@
 import { AutoRouter } from "itty-router";
 import type { Env } from "../index";
 import { query, queryOne } from "../db/schema";
+import { sendDedupedTelegram } from "../services/telegram-dedup";
 
 interface ReminderStats {
   completed: Array<{ kind: string; duration: number }>;
@@ -128,24 +129,22 @@ supervisorRouter.post("/api/supervisor/reminders/check", async (req, env: Env) =
   const stats = await fetchReminderStats(env, 4);
   const message = buildReminderMessage(stats, now.toLocaleTimeString(), now);
 
-  // Send to Telegram with preview button
+  // Send to Telegram with preview button — deduped against scheduled.ts digest
+  // (same hour + same content collapses to a single send)
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: env.TELEGRAM_CHAT_ID,
-        text: message,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "🔮 Preview Next 2", callback_data: "remind_preview_next_2" },
-              { text: "✅ Approve All", callback_data: "remind_approve_all" },
-            ],
+    await sendDedupedTelegram(env, {
+      chatId:     env.TELEGRAM_CHAT_ID,
+      routeType:  "supervisor_digest",
+      text:       message,
+      parseMode:  "HTML",
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            { text: "🔮 Preview Next 2", callback_data: "remind_preview_next_2" },
+            { text: "✅ Approve All",   callback_data: "remind_approve_all" },
           ],
-        },
-      }),
+        ],
+      },
     });
   }
 
@@ -164,28 +163,26 @@ supervisorRouter.post("/api/supervisor/reminders/preview-next", async (req, env:
 
   const previewMessage = `🔮 <b>SUPERVISOR PREVIEW</b>\n\n${reminder1}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${reminder2}\n\n<i>Early approval available — pre-authorize actions before scheduled execution</i>`;
 
-  // Send to Telegram with approval buttons
+  // Send to Telegram with approval buttons — preview-next is its own route_type
+  // so it doesn't collide with the main supervisor_digest dedup window
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: env.TELEGRAM_CHAT_ID,
-        text: previewMessage,
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "✅ Pre-approve +4h", callback_data: "remind_preapprove_1" },
-              { text: "✅ Pre-approve +8h", callback_data: "remind_preapprove_2" },
-            ],
-            [
-              { text: "🔄 Refresh", callback_data: "remind_refresh_preview" },
-              { text: "❌ Dismiss", callback_data: "remind_dismiss_preview" },
-            ],
+    await sendDedupedTelegram(env, {
+      chatId:     env.TELEGRAM_CHAT_ID,
+      routeType:  "supervisor_preview",
+      text:       previewMessage,
+      parseMode:  "HTML",
+      replyMarkup: {
+        inline_keyboard: [
+          [
+            { text: "✅ Pre-approve +4h", callback_data: "remind_preapprove_1" },
+            { text: "✅ Pre-approve +8h", callback_data: "remind_preapprove_2" },
           ],
-        },
-      }),
+          [
+            { text: "🔄 Refresh", callback_data: "remind_refresh_preview" },
+            { text: "❌ Dismiss", callback_data: "remind_dismiss_preview" },
+          ],
+        ],
+      },
     });
   }
 
