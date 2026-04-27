@@ -1,6 +1,6 @@
 ﻿import { AutoRouter, type IRequest } from "itty-router";
 import type { Env } from "../index";
-import { query, queryOne, run } from "../db/schema";
+import { query, queryOne, run, claimRow } from "../db/schema";
 import type { Approval, ApprovalDecision } from "@bot-nation/core-domain";
 import { sendApprovalToTelegram } from "./telegram";
 import { applyChangeForApproval } from "../services/change-apply";
@@ -91,8 +91,18 @@ approvalsRouter.post("/api/approvals/:id/decision", async (req, env) => {
     rationale: body.rationale,
   });
   const now = new Date().toISOString();
-  await run(env.DB, "UPDATE approvals SET status=?, decisions=?, updated_at=? WHERE id=?",
-    [body.decision, JSON.stringify(decisions), now, id]);
+  // Universal CAS (#3): inline-keyboard tap + slash command + REST decide could
+  // each apply this twice. Only the first wins; the rest get 409.
+  const claimed = await claimRow(env.DB, "approvals", id, {
+    fromStatus: "pending",
+    toStatus:   body.decision,
+    claimedBy:  `operator:${body.userId}`,
+    extraSets:  "decisions=?",
+    extraParams: [JSON.stringify(decisions)],
+  });
+  if (!claimed) {
+    return Response.json({ error: "approval no longer pending — somebody else got there first" }, { status: 409 });
+  }
   await run(env.DB, "UPDATE tasks SET status=?, updated_at=? WHERE approval_id=?",
     [body.decision, now, id]);
 

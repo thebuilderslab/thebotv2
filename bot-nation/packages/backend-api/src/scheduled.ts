@@ -15,7 +15,8 @@
  */
 
 import type { Env } from "./index";
-import { query, queryOne, run } from "./db/schema";
+import { query, queryOne, run, claimRow } from "./db/schema";
+import { claimCronTick, releaseCronTick } from "./services/cron-cas";
 import { routeTask } from "./services/task-router";
 import { getActiveWatchlist, refreshStreamingData } from "./services/thinkorswim-bridge";
 import { generatePriceTargets, formatTargetsForTelegram } from "./services/price-target-service";
@@ -457,6 +458,34 @@ export async function scheduledHandler(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<void> {
+  // ── Universal CAS (#5 + section 3 cron use cases) ────────────────────────────
+  // Every cron tick claims a lock keyed by its cron expression. If a previous
+  // tick is still mid-flight, this one becomes a no-op. Stale locks (past
+  // expires_at) are auto-reclaimed so a crashed Worker doesn't lock us out.
+  // Skip the lock for the */5 streaming-data check — it's intentionally
+  // re-entrant for tick freshness, and the body is idempotent.
+  const isStreamCron = controller.cron === "*/5 13-20 * * 1-5";
+  if (isStreamCron) {
+    return runScheduledTick(controller, env, ctx);
+  }
+  const cronLockKey = `cron:${controller.cron}`;
+  const claim = await claimCronTick(env.DB, cronLockKey, { ttlMs: 10 * 60 * 1000 });
+  if (!claim.ok) {
+    console.log(`[scheduler] cron '${controller.cron}' skipped — already running`);
+    return;
+  }
+  try {
+    await runScheduledTick(controller, env, ctx);
+  } finally {
+    await releaseCronTick(env.DB, cronLockKey);
+  }
+}
+
+async function runScheduledTick(
+  controller: ScheduledController,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<void> {
   const now = new Date().toISOString();
 
   // ── Streaming data feed — market hours (*/5 13-20 * * 1-5) ──────────────────
@@ -588,8 +617,14 @@ export async function scheduledHandler(
   );
 
   for (const bt of baileyPending) {
-    // Mark running so it's not double-dispatched
-    await run(env.DB, "UPDATE tasks SET status='running', updated_at=? WHERE id=?", [now, bt.id]);
+    // Universal CAS (#1): only the tick that flips pending→running gets to dispatch.
+    // Concurrent ticks racing on the same row will silently no-op the loser.
+    const claimed = await claimRow(env.DB, "tasks", bt.id, {
+      fromStatus: "pending",
+      toStatus:   "running",
+      claimedBy:  "cron_bailey_dispatch",
+    });
+    if (!claimed) continue; // another tick already grabbed it
     ctx.waitUntil((async () => {
       try {
         const workerUrl = "https://bot-nation-api.thejamalshackleford.workers.dev";
@@ -624,11 +659,15 @@ export async function scheduledHandler(
   );
 
   for (const task of pending) {
-    await run(
-      env.DB,
-      "UPDATE tasks SET status='running', updated_at=? WHERE id=?",
-      [now, task.id],
-    );
+    // Universal CAS (#1): the loser of a race silently skips this task.
+    // Without this, two overlapping ticks (or cron + telegram) double-dispatch
+    // the DO → double LLM bills, conflicting tool calls, duplicate replies.
+    const claimed = await claimRow(env.DB, "tasks", task.id, {
+      fromStatus: "pending",
+      toStatus:   "running",
+      claimedBy:  "cron_dispatcher",
+    });
+    if (!claimed) continue;
     await emitEvent(env.DB, "task.status_changed", task.assigned_agent_id, "task", task.id, {
       from: "pending",
       to: "running",
