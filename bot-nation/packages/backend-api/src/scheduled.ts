@@ -20,6 +20,7 @@ import { claimCronTick, releaseCronTick } from "./services/cron-cas";
 import { routeTask } from "./services/task-router";
 import { getActiveWatchlist, refreshStreamingData } from "./services/thinkorswim-bridge";
 import { generatePriceTargets, formatTargetsForTelegram } from "./services/price-target-service";
+import { sendDedupedTelegram } from "./services/telegram-dedup";
 
 const DISPATCH_LIMIT = 10;
 const PARENT_TIMEOUT_MINUTES = 60;
@@ -530,14 +531,11 @@ async function runScheduledTick(
         });
         if (targets.length > 0 && env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
           const msg = formatTargetsForTelegram(targets);
-          await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chat_id: env.TELEGRAM_CHAT_ID,
-              text: msg,
-              parse_mode: "Markdown",
-            }),
+          await sendDedupedTelegram(env, {
+            chatId:     env.TELEGRAM_CHAT_ID,
+            routeType:  "price_targets_daily",
+            text:       msg,
+            parseMode:  "Markdown",
           });
         }
       } catch (err) {
@@ -948,22 +946,18 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
     `  /proposals · /stats · /agents · /help\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
-  await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: env.TELEGRAM_CHAT_ID,
-      text: message,
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [[
-          { text: "📋 Proposals",       callback_data: "remind_view_proposals" },
-          { text: "📊 Stats",           callback_data: "remind_view_stats" },
-          { text: "📜 Directives",      callback_data: "remind_view_directives" },
-        ]],
-      },
-    }),
-    signal: AbortSignal.timeout(10_000),
+  await sendDedupedTelegram(env, {
+    chatId:     env.TELEGRAM_CHAT_ID,
+    routeType:  "supervisor_digest",
+    text:       message,
+    parseMode:  "HTML",
+    replyMarkup: {
+      inline_keyboard: [[
+        { text: "📋 Proposals",  callback_data: "remind_view_proposals" },
+        { text: "📊 Stats",      callback_data: "remind_view_stats" },
+        { text: "📜 Directives", callback_data: "remind_view_directives" },
+      ]],
+    },
   });
 
   await emitEvent(env.DB, "supervisor.reminder_sent", null, "system", "supervisor", {
