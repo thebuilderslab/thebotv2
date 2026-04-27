@@ -262,6 +262,145 @@ buildRouter.post("/api/build/submit", async (c) => {
   });
 });
 
+// ── POST /api/build/edit-section ─────────────────────────────────────────────
+// Surgical single-section edit. Agent sends {path, old_string, new_string} —
+// the endpoint reads the current file from GitHub, validates that old_string
+// appears exactly once, swaps it for new_string, and submits the result
+// through the same pending_approval + Telegram preview flow as submit.
+//
+// Big win: agent sends ~500 tokens instead of regenerating a ~12k-token file.
+
+buildRouter.post("/api/build/edit-section", async (c) => {
+  const githubToken = c.env.GITHUB_TOKEN;
+  if (!githubToken) return c.json({ error: "GITHUB_TOKEN not configured" }, 500);
+
+  let body: {
+    path?: string;
+    old_string?: string;
+    new_string?: string;
+    commit_message?: string;
+    change_summary?: string;
+    task_id?: string;
+    chat_id?: string | number;
+  };
+  try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON body" }, 400); }
+
+  if (!body.path)           return c.json({ error: "path is required" }, 400);
+  if (body.old_string == null)  return c.json({ error: "old_string is required" }, 400);
+  if (body.new_string == null)  return c.json({ error: "new_string is required" }, 400);
+  if (!body.commit_message) return c.json({ error: "commit_message is required" }, 400);
+  if (!body.change_summary) return c.json({ error: "change_summary is required" }, 400);
+  if (!isPathAllowed(body.path)) {
+    return c.json({
+      error: `Path not allowed: ${body.path}. Allowed prefixes: ${ALLOWED_PATH_PREFIXES.join(", ")}`,
+    }, 400);
+  }
+  if (body.old_string === body.new_string) {
+    return c.json({ error: "old_string and new_string are identical — nothing to change" }, 400);
+  }
+  if (body.old_string.length === 0) {
+    return c.json({ error: "old_string must be non-empty (use submit_code_change to create a new file)" }, 400);
+  }
+
+  // ── 1. Read current file from GitHub ──────────────────────────────────────
+  const clean = body.path.replace(/^\.\//, "").replace(/\\/g, "/");
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${clean}`;
+  const resp = await fetch(apiUrl, {
+    headers: {
+      "Authorization": `Bearer ${githubToken}`,
+      "Accept":        "application/vnd.github.raw+json",
+      "User-Agent":    "bot-nation-agent/1.0",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!resp.ok) {
+    if (resp.status === 404) {
+      return c.json({
+        error: `File does not exist: ${clean}. Use submit_code_change to create new files.`,
+      }, 404);
+    }
+    return c.json({ error: `GitHub API ${resp.status} reading file` }, 502);
+  }
+  const currentContent = await resp.text();
+
+  // ── 2. Validate uniqueness of old_string ──────────────────────────────────
+  const idx = currentContent.indexOf(body.old_string);
+  if (idx === -1) {
+    return c.json({
+      error: `old_string not found in ${clean}. The file may have changed, or your match isn't verbatim. Tip: re-read the file with read_github_file and check whitespace/indentation.`,
+    }, 422);
+  }
+  // Check for a second occurrence — must be exactly one match.
+  if (currentContent.indexOf(body.old_string, idx + 1) !== -1) {
+    return c.json({
+      error: `old_string matches more than once in ${clean}. Add 1–3 lines of surrounding context to make it unique.`,
+    }, 422);
+  }
+
+  // ── 3. Apply the patch ────────────────────────────────────────────────────
+  const newContent =
+    currentContent.slice(0, idx) +
+    body.new_string +
+    currentContent.slice(idx + body.old_string.length);
+
+  // ── 4. Submit through the same pending_approval flow ──────────────────────
+  const id  = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const chatId = body.chat_id ?? c.env.TELEGRAM_CHAT_ID ?? "";
+  const files = [{ path: clean, content: newContent }];
+
+  await run(c.env.DB,
+    `INSERT INTO code_changes (id, task_id, agent_id, files, commit_message, status, chat_id, created_at, updated_at)
+     VALUES (?, ?, 'agent-build-lead', ?, ?, 'pending_approval', ?, ?, ?)`,
+    [id, body.task_id ?? null, JSON.stringify(files), body.commit_message,
+     chatId ? String(chatId) : null, now, now],
+  );
+
+  // ── 5. Telegram preview (showing the diff snippet, not the whole file) ────
+  if (c.env.TELEGRAM_BOT_TOKEN && chatId) {
+    const oldSnippet = escapeHtml(body.old_string.slice(0, 400));
+    const newSnippet = escapeHtml(body.new_string.slice(0, 400));
+    const oldTrunc = body.old_string.length > 400 ? `\n<i>… +${body.old_string.length - 400} more chars</i>` : "";
+    const newTrunc = body.new_string.length > 400 ? `\n<i>… +${body.new_string.length - 400} more chars</i>` : "";
+
+    const previewText =
+      `🔍 <b>Surgical edit ready — review before deploying</b>\n\n` +
+      `<b>Commit:</b> <i>${escapeHtml(body.commit_message)}</i>\n\n` +
+      `<b>File:</b> <code>${escapeHtml(clean)}</code>\n\n` +
+      `📝 <b>What changed:</b>\n${escapeHtml(body.change_summary)}\n\n` +
+      `<b>− Removed:</b>\n<pre>${oldSnippet}</pre>${oldTrunc}\n\n` +
+      `<b>+ Added:</b>\n<pre>${newSnippet}</pre>${newTrunc}\n\n` +
+      `Tap ✅ to deploy or ❌ to cancel.`;
+
+    const keyboard = {
+      inline_keyboard: [[
+        { text: "✅ Deploy it", callback_data: `build_approve:${id}` },
+        { text: "❌ Cancel",    callback_data: `build_cancel:${id}` },
+      ]],
+    };
+
+    await fetch(`https://api.telegram.org/bot${c.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id:      String(chatId),
+        text:         previewText,
+        parse_mode:   "HTML",
+        reply_markup: keyboard,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
+  }
+
+  return c.json({
+    status:        "pending_approval",
+    change_id:     id,
+    path:          clean,
+    bytes_changed: body.new_string.length - body.old_string.length,
+    message:       `Preview sent to Telegram. Tap ✅ Deploy to trigger GitHub Actions deployment, or ❌ Cancel to abort.`,
+  });
+});
+
 // ── POST /api/build/change/:id/approve ───────────────────────────────────────
 // Operator approves the preview → dispatches to GitHub Actions.
 // Also called internally by the Telegram callback handler.
