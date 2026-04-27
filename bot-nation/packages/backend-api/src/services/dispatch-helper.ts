@@ -67,11 +67,12 @@ export async function dispatchTextAsTask(
 You MUST call the tools below in order. Do NOT describe what you will do — execute it.
 
 STEP 1 — CALL read_github_file
-Choose the most relevant file. Paths MUST start with "bot-nation/" — that is the repo layout.
-  • Morning brief / scheduled output → bot-nation/packages/backend-api/src/scheduled.ts
-  • Telegram routing, formatting, buttons → bot-nation/packages/backend-api/src/routes/telegram.ts
-  • Agent behavior, system prompt → bot-nation/packages/backend-api/src/actors/AgentActor.ts
-  • Query classifier / team routing → bot-nation/packages/backend-api/src/services/query-classifier.ts
+Choose the most relevant file. Paths must start with "packages/..." (the Worker validator
+strips a "bot-nation/" prefix if present, but use the bare form):
+  • Morning brief / scheduled output → packages/backend-api/src/scheduled.ts
+  • Telegram routing, formatting, buttons → packages/backend-api/src/routes/telegram.ts
+  • Agent behavior, system prompt → packages/backend-api/src/actors/AgentActor.ts
+  • Query classifier / team routing → packages/backend-api/src/services/query-classifier.ts
 Call: read_github_file({ path: "<chosen file>" })
 
 STEP 2 — LOCATE THE CHANGE
