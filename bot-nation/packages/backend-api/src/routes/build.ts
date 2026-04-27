@@ -128,6 +128,14 @@ function isPathAllowed(p: string): boolean {
   return ALLOWED_PATH_PREFIXES.some((prefix) => clean.startsWith(prefix));
 }
 
+// On GitHub the repo's true layout has everything under `bot-nation/`. Our
+// agent paths are bare (e.g. `packages/backend-api/src/foo.ts`) so we prefix
+// before any github API call. Accept either form from the agent.
+function toRepoPath(p: string): string {
+  const clean = p.replace(/^\.\//, "").replace(/\\/g, "/");
+  return clean.startsWith("bot-nation/") ? clean : `bot-nation/${clean}`;
+}
+
 // ── POST /api/build/submit ────────────────────────────────────────────────────
 // Called by agent-build-lead (submit_code_change tool).
 // Stores change in D1 as pending_approval, sends Telegram preview with
@@ -303,8 +311,9 @@ buildRouter.post("/api/build/edit-section", async (c) => {
   }
 
   // ── 1. Read current file from GitHub ──────────────────────────────────────
-  const clean = body.path.replace(/^\.\//, "").replace(/\\/g, "/");
-  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${clean}`;
+  const clean   = body.path.replace(/^\.\//, "").replace(/\\/g, "/");
+  const ghPath  = toRepoPath(clean);
+  const apiUrl  = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${ghPath}`;
   const resp = await fetch(apiUrl, {
     headers: {
       "Authorization": `Bearer ${githubToken}`,
@@ -512,11 +521,14 @@ buildRouter.post("/api/build/read-file", async (c) => {
   if (!body.path) return c.json({ error: "path is required" }, 400);
 
   const clean = body.path.replace(/^\.\//, "").replace(/\\/g, "/");
-  if (!ALLOWED_PATH_PREFIXES.some((p) => clean.startsWith(p))) {
+  // Allow either bare (`packages/...`) or prefixed (`bot-nation/packages/...`) form
+  const checkPath = clean.startsWith("bot-nation/") ? clean.slice("bot-nation/".length) : clean;
+  if (!ALLOWED_PATH_PREFIXES.some((p) => checkPath.startsWith(p))) {
     return c.json({ error: `Path not in allowed prefixes. Allowed: ${ALLOWED_PATH_PREFIXES.join(", ")}` }, 400);
   }
 
-  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${clean}`;
+  const ghPath = toRepoPath(clean);
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${ghPath}`;
   const resp = await fetch(apiUrl, {
     headers: {
       "Authorization": `Bearer ${githubToken}`,
