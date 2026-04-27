@@ -13,7 +13,8 @@
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-export const MAX_INPUT_LENGTH   = 2000;   // chars — truncated before reaching LLM
+export const MAX_INPUT_LENGTH        = 2000;    // chars — user-supplied summary/text
+export const MAX_DETAILS_LENGTH      = 20000;   // chars — internal task details (instructions)
 export const MAX_SPAWN_DEPTH    = 3;      // root=0, child=1, grandchild=2, great=3 (blocked)
 export const MAX_CHILDREN       = 5;      // max sub-tasks a single SPAWN_TASKS block may request
 export const MAX_GRAPH_NODES    = 20;     // max node executions per graph traversal
@@ -38,12 +39,13 @@ const INJECTION_PATTERNS: RegExp[] = [
 // ── 1. Input sanitisation ─────────────────────────────────────────────────────
 
 /**
- * Sanitise user-supplied text before it reaches any LLM prompt.
+ * Sanitise text before it reaches any LLM prompt.
  * - Strips known prompt-injection patterns
- * - Truncates to MAX_INPUT_LENGTH
+ * - Truncates to maxLength (default MAX_INPUT_LENGTH for user input)
+ *   Pass MAX_DETAILS_LENGTH for internal task details so instructions aren't chopped.
  * Returns { safe: string; flagged: boolean; reasons: string[] }
  */
-export function sanitiseInput(raw: string): {
+export function sanitiseInput(raw: string, maxLength = MAX_INPUT_LENGTH): {
   safe: string;
   flagged: boolean;
   reasons: string[];
@@ -59,9 +61,9 @@ export function sanitiseInput(raw: string): {
     }
   }
 
-  if (text.length > MAX_INPUT_LENGTH) {
-    reasons.push(`Input truncated from ${text.length} to ${MAX_INPUT_LENGTH} chars`);
-    text = text.slice(0, MAX_INPUT_LENGTH) + "… [truncated]";
+  if (text.length > maxLength) {
+    reasons.push(`Input truncated from ${text.length} to ${maxLength} chars`);
+    text = text.slice(0, maxLength) + "… [truncated]";
   }
 
   return { safe: text, flagged: reasons.length > 0, reasons };

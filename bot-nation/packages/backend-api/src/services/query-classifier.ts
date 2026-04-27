@@ -133,12 +133,23 @@ const CODE_CHANGE_PATTERNS = [
   // Explicit fix/change verbs aimed at bot behaviour, output, or code
   /\b(fix|change|update|modify|improve|refactor|rewrite)\b.{0,60}\b(format|output|display|show|reply|response|message|template|prompt|brief|command|button|route|endpoint|code|script|function|handler|feature)\b/i,
   /\b(make (it|the|this|that))\b.{0,60}\b(show|display|bold|include|exclude|add|remove|format|use|send|return)\b/i,
-  /\b(add (a|an|the)|remove (the|a|an))\b.{0,60}\b(feature|button|command|field|column|section|handler|route|endpoint|tool|step|check)\b/i,
+  // "add X to Y" or "remove X from Y" — no article required
+  /\b(add|remove)\b.{0,80}\b(feature|button|command|field|column|section|handler|route|endpoint|tool|step|check|line|text|reminder|header|footer|menu|actions|action|option)\b/i,
   /\b(show|display|format|include|exclude)\b.{0,60}\b(in bold|as bold|with bold|in italic|as a list|as bullets|differently|instead)\b/i,
   // "fix the X to do Y" — explicit repair instruction
   /\bfix\b.{0,40}\bto\b.{0,60}\b(show|display|include|use|send|return|format|output|add|remove)\b/i,
-  // "update the X so that / to" — update instruction
-  /\b(update|change|modify)\b.{0,40}\b(so (that|it)|to)\b.{0,60}\b(show|include|use|format|output|send|add|remove|display)\b/i,
+  // "update/change/add/remove the X so that / to" — update instruction
+  /\b(update|change|modify|add|remove)\b.{0,60}\b(so (that|it)|to)\b.{0,60}\b(show|include|use|format|output|send|add|remove|display|read|say)\b/i,
+  // "so it reads X" — explicit specification of new output text
+  /\bso (it|the \w+) reads\b/i,
+  // "to read/say/show X" after a change verb
+  /\b(change|update|modify|rename|replace)\b.{0,80}\b(to (read|say|show|display)|so (it|that) (reads|says|shows|displays))\b/i,
+  // Explicit file path — operator names a source file → always a code change
+  /\b(bot-nation\/|packages\/backend-api\/|packages\/frontend-app\/|src\/(routes|services|actors)\/)\S*\.(ts|tsx|js|jsx|sql|yml|yaml|json)\b/i,
+  // "change X from Y to Z" / "change X back to Y" — explicit before/after value swap
+  /\b(change|update|modify|rename|replace|swap)\b.{0,80}\bfrom\b.{0,120}\b(back )?to\b/i,
+  // "revert X to Y" / "set X to Y" — directive value change
+  /\b(revert|restore|set)\b.{0,80}\bto\b\s+["'`]?[\w\s—–\-]+["'`]?/i,
 ];
 
 /**

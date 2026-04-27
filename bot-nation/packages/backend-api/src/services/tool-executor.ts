@@ -77,6 +77,24 @@ const INTROSPECTION_QUERIES: Record<string, { sql: string; params: (i: Record<st
     sql: `SELECT id, name, role, domain, status FROM agents WHERE status='active' ORDER BY domain`,
     params: () => [],
   },
+  // Recent Telegram conversation (last 20 in/out messages)
+  recent_messages: {
+    sql: `SELECT direction, text, route_type, agent_id, quality, created_at
+          FROM telegram_messages
+          ORDER BY created_at DESC LIMIT 20`,
+    params: () => [],
+  },
+  // Messages by route type — identify which routes produce low-quality responses
+  message_quality: {
+    sql: `SELECT route_type,
+                 COUNT(*) as total,
+                 AVG(CASE WHEN quality IS NOT NULL THEN quality END) as avg_quality,
+                 COUNT(CASE WHEN quality IS NOT NULL THEN 1 END) as rated_count
+          FROM telegram_messages
+          WHERE direction='out' AND created_at > datetime('now','-7 days')
+          GROUP BY route_type`,
+    params: () => [],
+  },
   // Recent failed tasks (last 4h)
   recent_failures: {
     sql: `SELECT id, kind, assigned_agent_id, retry_count, updated_at

@@ -811,8 +811,14 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
       }>(env.DB, `SELECT * FROM system_health`, []),
 
       // ── Gap detection: inbound messages with no reply in 5+ min ─────────────
-      // A "gap" is a user message (direction='in') where no outbound message
-      // was logged for the same chat within the next 5 minutes.
+      // A "gap" is a user message (direction='in') where:
+      //  • no outbound message was logged for the same chat within the next 5 min, AND
+      //  • the inbound was NOT already linked to a task that has progressed
+      //    (running/completed/dispatched/dispatching/waiting_children), AND
+      //  • no task with the same prompt text reached a non-failed status recently
+      //    (covers the case where task_id wasn't stamped on the inbound row).
+      // Bug 1 fix (Apr 2026): without the task-join checks, gap recovery
+      // re-dispatched already-completed prompts as duplicate tasks every digest.
       query<{ text: string; created_at: string }>(env.DB,
         `SELECT i.text, i.created_at
          FROM telegram_messages i
@@ -824,6 +830,17 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
              WHERE o.direction = 'out'
                AND o.created_at > i.created_at
                AND o.created_at < datetime(i.created_at, '+5 minutes')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM tasks t
+             WHERE t.id = i.task_id
+               AND t.status IN ('running','completed','dispatched','dispatching','waiting_children')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM tasks t2
+             WHERE json_extract(t2.input, '$.summary') = i.text
+               AND t2.created_at >= i.created_at
+               AND t2.status IN ('running','completed','dispatched','dispatching','waiting_children')
            )
          ORDER BY i.created_at DESC LIMIT 5`,
         [cutoff4h, cutoff5m]),
@@ -860,10 +877,42 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
     ? activeCrons.map((c) => `  ├─ ${c.cron_expression} → ${c.task_kind}`).join("\n")
     : "  └─ None (/propose cron_request to add one)";
 
-  // ── Gap alert section ────────────────────────────────────────────────────
-  const gapSection = unanswered.length > 0
-    ? `\n⚠️ <b>UNANSWERED QUERIES (${unanswered.length}):</b>\n` +
-      unanswered.map((u) => {
+  // ── Gap auto-answer + alert section ──────────────────────────────────────
+  // For each unanswered query, attempt to dispatch it as a real task right now.
+  // Trivial replies (yeah/ok/etc.) are filtered inside dispatchTextAsTask.
+  const { dispatchTextAsTask } = await import("./services/dispatch-helper");
+  const gapChatId = env.TELEGRAM_CHAT_ID;
+  const dispatchedNow: string[] = [];
+  const stillUnanswered: typeof unanswered = [];
+  if (gapChatId) {
+    for (const u of unanswered) {
+      try {
+        const result = await dispatchTextAsTask(env, gapChatId, u.text, {
+          sendAck: false,
+          sourceLabel: "supervisor_gap_recovery",
+        });
+        if (result.ok) {
+          dispatchedNow.push(`${u.text.slice(0, 50)} → ${result.agentId}`);
+        } else {
+          stillUnanswered.push(u);
+        }
+      } catch (err) {
+        console.warn("[supervisor] gap auto-dispatch failed:", err);
+        stillUnanswered.push(u);
+      }
+    }
+  } else {
+    stillUnanswered.push(...unanswered);
+  }
+
+  const recoveredSection = dispatchedNow.length > 0
+    ? `\n🛠 <b>AUTO-ANSWERING (${dispatchedNow.length}):</b>\n` +
+      dispatchedNow.map((d) => `  ├─ ${d}`).join("\n") + "\n"
+    : "";
+
+  const gapSection = stillUnanswered.length > 0
+    ? `\n⚠️ <b>UNANSWERED QUERIES (${stillUnanswered.length}):</b>\n` +
+      stillUnanswered.map((u) => {
         const age = Math.round((Date.now() - new Date(u.created_at).getTime()) / 60000);
         return `  ├─ "${u.text.slice(0, 60)}" [${age}m ago]`;
       }).join("\n") + "\n"
@@ -885,6 +934,7 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
     `${timeLabel}\n` +
     `<i>Mission: Autonomous ops. Operator approves, never bottlenecks.</i>\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    recoveredSection +
     gapSection +
     approvalSection +
     `✅ <b>COMPLETED (last 4h):</b>\n${completedList}\n\n` +
