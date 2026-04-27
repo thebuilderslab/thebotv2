@@ -11,7 +11,7 @@
  * but never actually mutated the target entity.
  */
 
-import { queryOne, run } from "../db/schema";
+import { queryOne, run, claimRow } from "../db/schema";
 
 // ─── field allowlists ────────────────────────────────────────────────────────
 // Only fields listed here may appear in a changeSet for that entity kind.
@@ -74,9 +74,19 @@ export async function applyChangeForApproval(
     return { ok: true, entityId: approvalId, appliedFields: [] };
   }
 
-  // Mark proposal as approved so applyChangeFromProposal can proceed
-  const now = new Date().toISOString();
-  await run(db, "UPDATE proposals SET status='approved', updated_at=? WHERE id=?", [now, proposal.id]);
+  // Universal CAS (#4): only the first apply-attempt flips pending→approved.
+  // Multi-operator approval + scheduled auto-apply could otherwise both apply
+  // the same proposal — with applyChangeFromProposal then double-mutating the
+  // target entity. The loser silently no-ops and we return ok with no fields
+  // applied (caller treats this as "already done").
+  const claimed = await claimRow(db, "proposals", proposal.id, {
+    fromStatus: "pending",
+    toStatus:   "approved",
+    claimedBy:  actorId ?? "approval_handler",
+  });
+  if (!claimed) {
+    return { ok: true, entityId: proposal.id, appliedFields: [] };
+  }
 
   return applyChangeFromProposal(db, proposal.id, actorId, sessionId);
 }
@@ -141,13 +151,20 @@ export async function applyChangeFromProposal(
     return markFailed(db, proposalId, actorId, sessionId, patchError);
   }
 
-  // ── mark proposal applied ──────────────────────────────────────────────────
-  const now = new Date().toISOString();
-  await run(
-    db,
-    "UPDATE proposals SET status='applied', applied_at=?, updated_at=? WHERE id=?",
-    [now, now, proposalId],
-  );
+  // ── mark proposal applied (CAS #4 — only flip if still in 'approved') ─────
+  const claimedApplied = await claimRow(db, "proposals", proposalId, {
+    fromStatus: "approved",
+    toStatus:   "applied",
+    claimedBy:  actorId ?? "applyChangeFromProposal",
+    extraSets:  "applied_at=?",
+    extraParams: [new Date().toISOString()],
+  });
+  if (!claimedApplied) {
+    // Status moved out from under us between patch + claim. The patch already
+    // succeeded — we still emit the audit event below so observability is
+    // consistent, but we do NOT overwrite a 'failed' / 'cancelled' status.
+    console.warn(`[applyChangeFromProposal] proposal ${proposalId} no longer 'approved' — patch applied but status not flipped`);
+  }
 
   // ── emit audit event ───────────────────────────────────────────────────────
   await emitEvent(db, "proposal.applied", actorId, "proposal", proposalId, {

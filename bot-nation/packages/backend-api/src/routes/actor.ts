@@ -5,7 +5,7 @@
 
 import { AutoRouter, type IRequest } from "itty-router";
 import type { Env } from "../index";
-import { query, queryOne, run } from "../db/schema";
+import { query, queryOne, run, claimRow } from "../db/schema";
 
 export const actorRouter = AutoRouter<IRequest, [Env, ExecutionContext]>();
 
@@ -39,17 +39,24 @@ actorRouter.post("/api/actors/:agentId/dispatch", async (req, env) => {
   const now = new Date().toISOString();
   const sessionId = crypto.randomUUID();
 
+  // Universal CAS (#1): only the first manual dispatch gets to flip pending→running.
+  // A double-tap on the dispatch button or a cron-vs-manual race silently no-ops.
+  const claimed = await claimRow(env.DB, "tasks", taskId, {
+    fromStatus: "pending",
+    toStatus:   "running",
+    claimedBy:  `manual_dispatch:${agentId}`,
+    extraSets:  "session_id=?",
+    extraParams: [sessionId],
+  });
+  if (!claimed) {
+    return Response.json({ error: "task not in pending state — already dispatched" }, { status: 409 });
+  }
+
   await run(
     env.DB,
     `INSERT INTO agent_sessions (id, agent_id, task_id, status, ws_connected, started_at, updated_at)
      VALUES (?, ?, ?, 'running', 0, ?, ?)`,
     [sessionId, agentId, taskId, now, now],
-  );
-
-  await run(
-    env.DB,
-    "UPDATE tasks SET status='running', session_id=?, updated_at=? WHERE id=?",
-    [sessionId, now, taskId],
   );
 
   const doId = env.AGENT_ACTOR.idFromName(agentId);
