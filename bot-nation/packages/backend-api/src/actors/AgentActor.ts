@@ -436,6 +436,8 @@ export class AgentActor implements DurableObject {
 
     let promptTokens = 0;
     let completionTokens = 0;
+    let providerUsed: "openrouter" | "anthropic" | "graph" = "graph";
+    let actualModelUsed: string | undefined;
 
     if (graphRow) {
       // ── Graph traversal ────────────────────────────────────────────────────
@@ -457,6 +459,8 @@ export class AgentActor implements DurableObject {
       finalText = loopResult.text;
       promptTokens = loopResult.promptTokens;
       completionTokens = loopResult.completionTokens;
+      providerUsed = loopResult.provider;
+      actualModelUsed = loopResult.actualModel;
 
       // Check for SPAWN_TASKS — only in flat loop mode; graph mode handles decomposition structurally.
       const spawnMatch = finalText.match(/<SPAWN_TASKS>\s*([\s\S]*?)\s*<\/SPAWN_TASKS>/);
@@ -482,12 +486,20 @@ export class AgentActor implements DurableObject {
       [
         costArtifactId,
         `${taskId}-cost`,
-        JSON.stringify({ model: modelUsed, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }),
+        JSON.stringify({ model: modelUsed, actualModel: actualModelUsed ?? modelUsed, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }),
         taskId, now, now,
       ],
     );
     await this.emitEvent(taskId, "task.cost_reported",
-      { model: modelUsed, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens }, now);
+      {
+        model: modelUsed,                                    // requested model
+        actualModel: actualModelUsed ?? modelUsed,           // model the provider actually served (Bug 3 fix)
+        provider: providerUsed,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + completionTokens,
+      },
+      new Date().toISOString());
 
     // Store response artifact
     artifactId = crypto.randomUUID();
@@ -554,8 +566,9 @@ export class AgentActor implements DurableObject {
       }
     }
 
-    await this.emitEvent(taskId, "session.completed", { sessionId, artifactId }, now);
-    await this.updateSession(sessionId, "completed", now);
+    const completedAt = new Date().toISOString();
+    await this.emitEvent(taskId, "session.completed", { sessionId, artifactId }, completedAt);
+    await this.updateSession(sessionId, "completed", completedAt);
     this.broadcast(JSON.stringify({ type: "completed", taskId, summary: finalText.slice(0, 200) }));
 
     // Send Telegram completion notification
@@ -742,7 +755,7 @@ export class AgentActor implements DurableObject {
     taskId: string,
     _sessionId: string,
     modelConfig: { model: string; fallback: string; maxTokens: number; temperature: number },
-  ): Promise<{ text: string; promptTokens: number; completionTokens: number }> {
+  ): Promise<{ text: string; promptTokens: number; completionTokens: number; provider: "openrouter" | "anthropic"; actualModel?: string }> {
     let taskInput: { summary?: string; details?: string } = {};
     try { taskInput = JSON.parse(task.input) as typeof taskInput; } catch { /* ignore */ }
 
@@ -804,9 +817,19 @@ export class AgentActor implements DurableObject {
     let iterations = 0;
     let totalPromptTokens = 0;
     let totalCompletionTokens = 0;
+    // Bug 3 fix (Apr 2026): cost_reported.model previously echoed the *requested*
+    // OpenRouter slug even when the call actually fell through to Anthropic. Capture
+    // what the provider says it served us and return that as actualModel so the
+    // event truthfully reflects the served model.
+    let actualModel: string | undefined;
 
-    // Use OpenRouter if key available, else fall back to Anthropic
-    const useOpenRouter = !!this.env.OPENROUTER_API_KEY;
+    // Use OpenRouter if key available, else fall back to Anthropic.
+    // EXCEPTION: code_change/config_change/intel_review must use Anthropic directly —
+    // OpenRouter's pass-through to Kimi/Qwen/GLM does not reliably honor
+    // tool_choice:"required", so models emit text instead of calling tools.
+    // Claude (Anthropic SDK) is the most reliable for forced tool use.
+    const TOOL_FORCED_KINDS = new Set(["code_change", "config_change", "intel_review"]);
+    const useOpenRouter = !!this.env.OPENROUTER_API_KEY && !TOOL_FORCED_KINDS.has(task.kind);
 
     if (useOpenRouter) {
       const client = new OpenAI({
@@ -819,6 +842,8 @@ export class AgentActor implements DurableObject {
       });
 
       // ── Guardrail 5: Loop iteration cap ─────────────────────────────────────
+      // ── Guardrail 6: Submit-without-read protection (OpenRouter loop) ──────
+      const orReadPaths = new Set<string>();
       while (iterations < MAX_LOOP_ITERATIONS) {
         iterations++;
         // Force a tool call on the first iteration of code_change tasks —
@@ -841,6 +866,9 @@ export class AgentActor implements DurableObject {
         const stopReason = choice?.finish_reason;
         totalPromptTokens += response.usage?.prompt_tokens ?? 0;
         totalCompletionTokens += response.usage?.completion_tokens ?? 0;
+        // OpenRouter echoes the actually-served model (may differ from requested
+        // when fallbacks kick in). Bug 3 fix (Apr 2026).
+        if (response.model) actualModel = response.model;
 
         if (stopReason === "stop") {
           finalText = msg?.content ?? "";
@@ -852,13 +880,52 @@ export class AgentActor implements DurableObject {
           for (const tc of msg.tool_calls) {
             if (tc.type !== "function") continue;
             const toolInput = JSON.parse(tc.function.arguments) as Record<string, unknown>;
-            const callResult = await executeTool(this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY }, tc.function.name, toolInput);
+            // Guardrail 6: gate submit_code_change on prior successful read (OR loop)
+            let callResult: { ok: boolean; result?: unknown; error?: string };
+            if (tc.function.name === "submit_code_change") {
+              const input = toolInput as { files?: Array<{ path: string }> };
+              const targetPaths = (input.files ?? []).map((f) => f.path);
+              const unread = targetPaths.filter((p) => !orReadPaths.has(p));
+              if (unread.length > 0) {
+                callResult = {
+                  ok: false,
+                  error:
+                    `Refusing to submit_code_change: file(s) not previously read with read_github_file: ${unread.join(", ")}. ` +
+                    `Call read_github_file({ path: "<that path>" }) first. If the read returns "not found", DO NOT submit a placeholder — instead return a plain text response explaining the file does not exist.`,
+                };
+              } else {
+                callResult = await executeTool(this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY }, tc.function.name, toolInput);
+              }
+            } else {
+              callResult = await executeTool(this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY }, tc.function.name, toolInput);
+              if (tc.function.name === "read_github_file" && callResult.ok) {
+                // Guardrail 6 (Bug 2 fix, Apr 2026): /api/build/read-file returns
+                // ok:true with `exists:false` on 404 — do NOT add to readPaths,
+                // otherwise the model can submit fabricated content for a path
+                // that doesn't actually exist on the branch.
+                const r = (callResult.result ?? callResult) as { exists?: boolean; status?: number; error?: unknown; notFound?: boolean };
+                const fileMissing = r?.exists === false || r?.notFound === true || r?.status === 404 || typeof r?.error === "string";
+                if (!fileMissing) {
+                  const path = (toolInput as { path?: string })?.path;
+                  if (typeof path === "string") orReadPaths.add(path);
+                }
+              }
+            }
             messages.push({
               role: "tool",
               tool_call_id: tc.id,
               content: callResult.ok ? JSON.stringify(callResult.result) : `Error: ${callResult.error}`,
             });
             this.broadcast(JSON.stringify({ type: "tool_call", toolName: tc.function.name, ok: callResult.ok }));
+            await this.emitEvent(taskId, "tool.called", {
+              tool: tc.function.name,
+              ok: callResult.ok,
+              provider: "openrouter",
+              model: modelConfig.model,
+              args: toolInput,
+              error: callResult.ok ? undefined : callResult.error,
+              resultPreview: callResult.ok ? JSON.stringify(callResult.result).slice(0, 500) : undefined,
+            }, new Date().toISOString());
           }
           continue;
         }
@@ -873,17 +940,54 @@ export class AgentActor implements DurableObject {
       const anthropicMessages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
 
       // ── Guardrail 5: Loop iteration cap (Anthropic fallback) ────────────────
+      // For code_change: keep forcing tool use until submit_code_change has run.
+      // After read_github_file, the model tends to drift into narrative text
+      // ("I'll generate the file and submit it") and never call submit_code_change.
+      let submitCodeChangeCalled = false;
+      let readGithubFileCalled = false;
+      // ── Guardrail 6: Submit-without-read protection ─────────────────────────
+      // Track which paths were successfully fetched via read_github_file. The
+      // submit_code_change tool MUST NOT write to a path we never read — that
+      // would let the model fabricate file contents (e.g. when GitHub returns
+      // 404 the model hallucinated a 3-line placeholder and submitted it).
+      const readPaths = new Set<string>();
       while (iterations < MAX_LOOP_ITERATIONS) {
         iterations++;
+        const isCodeKind =
+          task.kind === "code_change" || task.kind === "config_change" || task.kind === "intel_review";
+        // Force tool use on iter 1 always; for code_change, keep forcing until
+        // submit_code_change has been called (so the agent can't bail out with
+        // descriptive text after read_github_file).
+        const forceToolUse =
+          anthropicTools.length > 0 &&
+          isCodeKind &&
+          (iterations === 1 || (task.kind === "code_change" && !submitCodeChangeCalled));
+        // After read_github_file has run at least once for a code_change, pin the
+        // next call to submit_code_change specifically — otherwise the model loops
+        // re-reading the same file because tool_choice:"any" lets it pick anything.
+        const hasSubmitTool = anthropicTools.some((t) => t.name === "submit_code_change");
+        const pinSubmit =
+          task.kind === "code_change" &&
+          readGithubFileCalled &&
+          !submitCodeChangeCalled &&
+          hasSubmitTool;
+        const toolChoice = pinSubmit
+          ? ({ type: "tool" as const, name: "submit_code_change" })
+          : forceToolUse
+            ? ({ type: "any" as const })
+            : undefined;
         const response = await anthropic.messages.create({
           model: "claude-haiku-4-5",
           max_tokens: modelConfig.maxTokens,
           system: systemPrompt,
           tools: anthropicTools.length > 0 ? anthropicTools : undefined,
+          ...(toolChoice ? { tool_choice: toolChoice } : {}),
           messages: anthropicMessages,
         });
         totalPromptTokens += response.usage.input_tokens;
         totalCompletionTokens += response.usage.output_tokens;
+        // Anthropic echoes the served model id. Bug 3 fix (Apr 2026).
+        if (response.model) actualModel = response.model;
 
         if (response.stop_reason === "end_turn") {
           const block = response.content.find((b) => b.type === "text");
@@ -896,16 +1000,62 @@ export class AgentActor implements DurableObject {
           const toolResults: Anthropic.ToolResultBlockParam[] = [];
           for (const block of response.content) {
             if (block.type !== "tool_use") continue;
-            const callResult = await executeTool(
-              this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY },
-              block.name, block.input as Record<string, unknown>,
-            );
+
+            // ── Guardrail 6: gate submit_code_change on prior successful read ──
+            // Reject any submit whose target paths weren't fetched in this task.
+            // Fail loud with a structured error so the model can self-correct.
+            let callResult: { ok: boolean; result?: unknown; error?: string };
+            if (block.name === "submit_code_change") {
+              const input = block.input as { files?: Array<{ path: string }> };
+              const targetPaths = (input.files ?? []).map((f) => f.path);
+              const unread = targetPaths.filter((p) => !readPaths.has(p));
+              if (unread.length > 0) {
+                callResult = {
+                  ok: false,
+                  error:
+                    `Refusing to submit_code_change: file(s) not previously read with read_github_file: ${unread.join(", ")}. ` +
+                    `Call read_github_file({ path: "<that path>" }) first. If the read returns "not found", DO NOT submit a placeholder — instead return a plain text response explaining the file does not exist.`,
+                };
+              } else {
+                callResult = await executeTool(
+                  this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY },
+                  block.name, block.input as Record<string, unknown>,
+                );
+                if (callResult.ok) submitCodeChangeCalled = true;
+              }
+            } else {
+              callResult = await executeTool(
+                this.env.DB, { searxngBaseUrl: this.env.SEARXNG_BASE_URL, braveApiKey: this.env.BRAVE_SEARCH_API_KEY },
+                block.name, block.input as Record<string, unknown>,
+              );
+              if (block.name === "read_github_file" && callResult.ok) {
+                readGithubFileCalled = true;
+                // Guardrail 6 (Bug 2 fix, Apr 2026): exists:false / 404 must NOT
+                // count as a successful read — otherwise the model fabricates a
+                // file body and submit_code_change accepts it.
+                const r = (callResult.result ?? callResult) as { exists?: boolean; status?: number; error?: unknown; notFound?: boolean };
+                const fileMissing = r?.exists === false || r?.notFound === true || r?.status === 404 || typeof r?.error === "string";
+                if (!fileMissing) {
+                  const path = (block.input as { path?: string })?.path;
+                  if (typeof path === "string") readPaths.add(path);
+                }
+              }
+            }
             toolResults.push({
               type: "tool_result",
               tool_use_id: block.id,
               content: callResult.ok ? JSON.stringify(callResult.result) : `Error: ${callResult.error}`,
             });
             this.broadcast(JSON.stringify({ type: "tool_call", toolName: block.name, ok: callResult.ok }));
+            await this.emitEvent(taskId, "tool.called", {
+              tool: block.name,
+              ok: callResult.ok,
+              provider: "anthropic",
+              model: "claude-haiku-4-5",
+              args: block.input,
+              error: callResult.ok ? undefined : callResult.error,
+              resultPreview: callResult.ok ? JSON.stringify(callResult.result).slice(0, 500) : undefined,
+            }, new Date().toISOString());
           }
           anthropicMessages.push({ role: "user", content: toolResults });
           continue;
@@ -932,7 +1082,7 @@ export class AgentActor implements DurableObject {
       }
     }
 
-    return { text: finalText, promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens };
+    return { text: finalText, promptTokens: totalPromptTokens, completionTokens: totalCompletionTokens, provider: useOpenRouter ? "openrouter" : "anthropic", actualModel };
   }
 
   // ── Swarm handoff ────────────────────────────────────────────────────────────

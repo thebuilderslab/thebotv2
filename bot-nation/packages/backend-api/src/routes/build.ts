@@ -18,6 +18,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { run, queryOne } from "../db/schema";
+import { persistTelegramMessage } from "../services/nation-supervisor";
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -28,20 +29,40 @@ function escapeHtml(s: string): string {
 export async function dispatchChangeToGitHub(
   env: Env,
   changeId: string,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; alreadyDispatched?: boolean }> {
   const row = await queryOne<{
     id: string; files: string; commit_message: string;
     task_id: string | null; chat_id: string | null;
+    status: string;
   }>(
     env.DB,
-    "SELECT id, files, commit_message, task_id, chat_id FROM code_changes WHERE id = ?",
+    "SELECT id, files, commit_message, task_id, chat_id, status FROM code_changes WHERE id = ?",
     [changeId],
   );
 
   if (!row) return { ok: false, error: "Change not found" };
 
+  // ── Idempotency CAS: only dispatch from pending_approval ─────────────────
+  // Atomically transition pending_approval → dispatching. If 0 rows updated,
+  // someone else (a duplicate button tap, replayed update) won the race.
+  const now = new Date().toISOString();
+  const claim = await env.DB.prepare(
+    "UPDATE code_changes SET status='dispatching', updated_at=? WHERE id=? AND status='pending_approval'",
+  ).bind(now, changeId).run();
+  if (!claim.meta.changes) {
+    return {
+      ok: false,
+      alreadyDispatched: true,
+      error: `Change already in status '${row.status}' — dispatch skipped (duplicate tap or replay)`,
+    };
+  }
+
   const githubToken = (env as unknown as Record<string, string>)["GITHUB_TOKEN"];
-  if (!githubToken) return { ok: false, error: "GITHUB_TOKEN not configured" };
+  if (!githubToken) {
+    // Roll back the claim so the operator can retry once the token is configured
+    await run(env.DB, "UPDATE code_changes SET status='pending_approval', updated_at=? WHERE id=?", [now, changeId]);
+    return { ok: false, error: "GITHUB_TOKEN not configured" };
+  }
 
   const dispatchPayload = {
     event_type: "bot-nation-deploy",
@@ -68,14 +89,14 @@ export async function dispatchChangeToGitHub(
     },
   );
 
-  const now = new Date().toISOString();
+  const after = new Date().toISOString();
   if (!ghResp.ok) {
     const errText = await ghResp.text();
-    await run(env.DB, "UPDATE code_changes SET status='failed', updated_at=? WHERE id=?", [now, changeId]);
+    await run(env.DB, "UPDATE code_changes SET status='failed', updated_at=? WHERE id=?", [after, changeId]);
     return { ok: false, error: `GitHub dispatch failed ${ghResp.status}: ${errText.slice(0, 200)}` };
   }
 
-  await run(env.DB, "UPDATE code_changes SET status='dispatched', updated_at=? WHERE id=?", [now, changeId]);
+  await run(env.DB, "UPDATE code_changes SET status='dispatched', updated_at=? WHERE id=?", [after, changeId]);
   return { ok: true };
 }
 
@@ -84,11 +105,12 @@ export const buildRouter = new Hono<{ Bindings: Env }>();
 const GITHUB_OWNER = "thebuilderslab";
 const GITHUB_REPO  = "thebotv2";
 
-// Paths the agent is allowed to read/write (safety fence — no secrets or CI files)
+// Paths the agent is allowed to read/write (safety fence — no secrets or CI files).
+// Repo layout is `<repo>/bot-nation/packages/...` so all paths MUST start with `bot-nation/`.
 const ALLOWED_PATH_PREFIXES = [
-  "packages/backend-api/src/",
-  "packages/backend-api/migrations/",
-  "packages/frontend-app/src/",
+  "bot-nation/packages/backend-api/src/",
+  "bot-nation/packages/backend-api/migrations/",
+  "bot-nation/packages/frontend-app/src/",
 ];
 
 // Paths that can never be written by the agent
@@ -145,15 +167,43 @@ buildRouter.post("/api/build/submit", async (c) => {
     }
   }
 
-  const id  = crypto.randomUUID();
   const now = new Date().toISOString();
   const chatId = body.chat_id ?? c.env.TELEGRAM_CHAT_ID ?? "";
+  const filesJson = JSON.stringify(body.files);
+
+  // ── Bug 5 fix (Apr 2026): preview-level dedup ──────────────────────────────
+  // If an open pending_approval already exists with the SAME files + commit
+  // message within the last 30 min, reuse it instead of creating a duplicate
+  // change_id + preview. CAS in dispatchChangeToGitHub only protects per-id;
+  // duplicate ids would each spawn their own preview + button.
+  const dedupCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const existing = await queryOne<{ id: string }>(
+    c.env.DB,
+    `SELECT id FROM code_changes
+     WHERE status='pending_approval'
+       AND commit_message=?
+       AND files=?
+       AND created_at > ?
+     ORDER BY created_at DESC LIMIT 1`,
+    [body.commit_message, filesJson, dedupCutoff],
+  );
+  if (existing) {
+    return c.json({
+      status:        "pending_approval",
+      change_id:     existing.id,
+      deduped:       true,
+      files_changed: body.files.length,
+      message:       `Identical pending change already awaiting approval (${existing.id}). Preview not re-sent.`,
+    });
+  }
+
+  const id = crypto.randomUUID();
 
   // Store in D1 as pending_approval (not dispatched yet — waits for operator ✅)
   await run(c.env.DB,
     `INSERT INTO code_changes (id, task_id, agent_id, files, commit_message, status, chat_id, created_at, updated_at)
      VALUES (?, ?, 'agent-build-lead', ?, ?, 'pending_approval', ?, ?, ?)`,
-    [id, body.task_id ?? null, JSON.stringify(body.files), body.commit_message,
+    [id, body.task_id ?? null, filesJson, body.commit_message,
      chatId ? String(chatId) : null, now, now],
   );
 
@@ -197,6 +247,11 @@ buildRouter.post("/api/build/submit", async (c) => {
       }),
       signal: AbortSignal.timeout(5_000),
     });
+    // Log outbound so supervisor gap-detection sees the reply
+    void persistTelegramMessage(c.env.DB, "out", chatId, previewText, {
+      taskId: body.task_id ?? undefined,
+      routeType: "deploy_preview",
+    });
   }
 
   return c.json({
@@ -224,6 +279,29 @@ buildRouter.post("/api/build/change/:id/cancel", async (c) => {
   const changeId = c.req.param("id");
   const now = new Date().toISOString();
   await run(c.env.DB, "UPDATE code_changes SET status='cancelled', updated_at=? WHERE id=?", [now, changeId]);
+  return c.json({ ok: true });
+});
+
+// ── POST /api/build/log-outbound ─────────────────────────────────────────────
+// Called by GitHub Actions after it sends Telegram success/failure messages
+// so supervisor gap-detection sees the reply and doesn't flag the originating
+// query as "unanswered". Authenticated by DEPLOY_WEBHOOK_SECRET.
+buildRouter.post("/api/build/log-outbound", async (c) => {
+  const secret = c.req.header("x-deploy-secret");
+  if (!secret || secret !== (c.env as unknown as Record<string, string>)["DEPLOY_WEBHOOK_SECRET"]) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  const body = await c.req.json<{
+    chat_id: string | number;
+    text: string;
+    task_id?: string;
+    route_type?: string;
+  }>();
+  if (!body.chat_id || !body.text) return c.json({ error: "chat_id and text required" }, 400);
+  void persistTelegramMessage(c.env.DB, "out", body.chat_id, body.text, {
+    taskId: body.task_id,
+    routeType: body.route_type ?? "deploy_notification",
+  });
   return c.json({ ok: true });
 });
 

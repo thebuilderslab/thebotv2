@@ -69,11 +69,75 @@ const TASK_KIND_ROUTING: Record<string, { teamId: string; agentId: string }> = {
 // ── URL patterns that trigger automatic intel review ─────────────────────────
 const INTEL_URL_PATTERN = /https?:\/\/(github\.com|gitlab\.com|bitbucket\.org|instagram\.com|twitter\.com|x\.com|ossinsight\.io)[^\s]*/gi;
 
+// ── Debug: inspect current webhook registration ──────────────────────────────
+// GET /telegram/debug/webhook-info — returns getWebhookInfo from Telegram so we
+// can verify allowed_updates includes callback_query. No auth: returns no secrets.
+telegramRouter.get("/telegram/debug/webhook-info", async (c) => {
+  const env = c.env as Env;
+  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getWebhookInfo`);
+  const j = await r.json();
+  return c.json(j);
+});
+
+// GET /telegram/debug/fix-webhook — one-shot: re-register webhook with callback_query allowed.
+// Idempotent + safe: only flips allowed_updates on the bot we already own.
+telegramRouter.get("/telegram/debug/fix-webhook", async (c) => {
+  const env = c.env as Env;
+  const url = "https://bot-nation-api.thejamalshackleford.workers.dev/api/telegram/webhook";
+  const allowed = ["message", "callback_query", "edited_message"];
+  const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setWebhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, allowed_updates: allowed, drop_pending_updates: false }),
+  });
+  const j = await r.json();
+  return c.json(j);
+});
+
 // ── Main webhook handler ──────────────────────────────────────────────────────
 
 telegramRouter.post("/telegram/webhook", async (c) => {
   const env = c.env as Env;
   const update = (await c.req.json()) as TelegramUpdate;
+
+  // ── Return 200 OK immediately to prevent Telegram webhook retry loops ────────
+  // Heavy operations (/targets price analysis, LLM calls) can take 30-60s.
+  // Telegram retries any webhook that doesn't respond within ~60s, causing
+  // duplicate messages. By returning 200 first and deferring work to waitUntil,
+  // Telegram never retries — update_id dedup guards against any residual replays.
+  c.executionCtx.waitUntil(processWebhookUpdate(update, env));
+  return c.json({ ok: true });
+});
+
+// ── Webhook update processor (runs in waitUntil — Telegram never sees latency) ──
+
+async function processWebhookUpdate(update: TelegramUpdate, env: Env): Promise<void> {
+  // ── update_id deduplication: skip already-processed updates ─────────────────
+  // Telegram may deliver an update more than once if the bot previously timed out.
+  // We guard with a short-lived D1 record keyed by update_id (kept 1 hour).
+  if (update.update_id) {
+    const dedupKey = `tg_dedup_${update.update_id}`;
+    const now = new Date().toISOString();
+    try {
+      // INSERT OR IGNORE — if row already exists this is a replay, skip it
+      const inserted = await env.DB.prepare(
+        `INSERT OR IGNORE INTO agent_notes (id, agent_id, key, value, created_at, updated_at)
+         VALUES (?, 'system', ?, '1', ?, ?)`
+      ).bind(crypto.randomUUID(), dedupKey, now, now).run();
+      if (!inserted.meta.changes) {
+        console.warn(`[Telegram] Duplicate update_id ${update.update_id} — skipping replay`);
+        return;
+      }
+      // Prune dedup records older than 2 hours to keep agent_notes clean
+      await env.DB.prepare(
+        `DELETE FROM agent_notes WHERE agent_id='system' AND key LIKE 'tg_dedup_%'
+         AND created_at < datetime('now', '-2 hours')`
+      ).run();
+    } catch {
+      // Dedup failure must never block message processing — log and continue
+      console.warn(`[Telegram] update_id dedup failed for ${update.update_id} — processing anyway`);
+    }
+  }
 
   if (update.message) {
     const chatId = update.message.chat.id;
@@ -82,26 +146,26 @@ telegramRouter.post("/telegram/webhook", async (c) => {
     console.log(`[Telegram] incoming chatId=${chatId} configured=${env.TELEGRAM_CHAT_ID}`);
     if (String(chatId) !== String(env.TELEGRAM_CHAT_ID)) {
       console.warn(`[Guardrail] Telegram message from unauthorised chat ${chatId} — dropped`);
-      return c.json({ ok: true });
+      return;
     }
 
     // ── Voice note → transcribe → route as text ──────────────────────────────
     if (update.message.voice ?? update.message.audio) {
       await handleVoiceMessage(chatId, update.message, env);
-      return c.json({ ok: true });
+      return;
     }
 
     // ── Photo / image → vision analysis → route as action task ───────────────
     if (update.message.photo?.length) {
       await handlePhotoMessage(chatId, update.message, env);
-      return c.json({ ok: true });
+      return;
     }
 
     const text = update.message.text?.trim() ?? "";
     const userId = update.message.from?.id ?? 0;
 
     if (!text) {
-      return c.json({ ok: true });
+      return;
     }
 
     // ── Slash commands → dedicated handlers (NOT nation-supervisor) ──────────
@@ -110,20 +174,21 @@ telegramRouter.post("/telegram/webhook", async (c) => {
     // real D1 data and dispatch real tasks.
     if (text.startsWith("/")) {
       await handleCommand(chatId, text, env);
-      return c.json({ ok: true });
+      return;
     }
 
-    // ── Log every inbound message (fire-and-forget — never blocks) ──────────────
-    void persistTelegramMessage(env.DB, "in", chatId, text, { userId });
-
     // ── URL detection — GitHub/GitLab/etc URLs go straight to intel-lead ────────
+    // NOTE: inbound message logging happens AFTER routing so each message is
+    // logged exactly once with full route metadata (prevents duplicate entries
+    // in the gap-detection query used by the supervisor reminder).
     // Bypass the classifier entirely so the agent gets a real task with tools,
     // not an inline LLM answer from nation-supervisor.
     {
       const intelUrls = text.match(INTEL_URL_PATTERN);
       if (intelUrls && intelUrls.length > 0) {
+        void persistTelegramMessage(env.DB, "in", chatId, text, { userId, routeType: "intel_url" });
         await handleIntelReview(chatId, intelUrls, text, env);
-        return c.json({ ok: true });
+        return;
       }
     }
 
@@ -164,11 +229,11 @@ telegramRouter.post("/telegram/webhook", async (c) => {
 You MUST call the tools below in order. Do NOT describe what you will do — execute it.
 
 STEP 1 — CALL read_github_file
-Choose the most relevant file for this change:
-  • Morning brief / scheduled output → packages/backend-api/src/scheduled.ts
-  • Telegram routing, formatting, buttons → packages/backend-api/src/routes/telegram.ts
-  • Agent behavior, system prompt → packages/backend-api/src/actors/AgentActor.ts
-  • Query classifier / team routing → packages/backend-api/src/services/query-classifier.ts
+Choose the most relevant file. Paths MUST start with "bot-nation/" — that is the repo layout.
+  • Morning brief / scheduled output → bot-nation/packages/backend-api/src/scheduled.ts
+  • Telegram routing, formatting, buttons → bot-nation/packages/backend-api/src/routes/telegram.ts
+  • Agent behavior, system prompt → bot-nation/packages/backend-api/src/actors/AgentActor.ts
+  • Query classifier / team routing → bot-nation/packages/backend-api/src/services/query-classifier.ts
 Call: read_github_file({ path: "<chosen file>" })
 
 STEP 2 — LOCATE THE CHANGE
@@ -187,11 +252,13 @@ Call: submit_code_change({
 YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to the operator for approval.`;
         }
 
-        // Store task in D1 with telegram_chat_id so results come back
+        // Store task as 'running' with started_at set so duration is accurate.
+        // Skipping 'pending' avoids the 3-minute cron-dispatch lag — we dispatch
+        // to the Durable Object immediately below.
         await run(env.DB,
-          `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, telegram_chat_id, created_at, updated_at)
-           VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
-          [taskId, kind, agentId, teamId, JSON.stringify({ summary: text, details: taskDetails }), chatId, now, now],
+          `INSERT INTO tasks (id, kind, status, assigned_agent_id, team_id, input, telegram_chat_id, started_at, created_at, updated_at)
+           VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)`,
+          [taskId, kind, agentId, teamId, JSON.stringify({ summary: text, details: taskDetails }), chatId, now, now, now],
         );
 
         // Update the in-log with route info
@@ -207,7 +274,7 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
         });
         void persistTelegramMessage(env.DB, "out", chatId, ackText, { taskId, routeType: "action", agentId });
 
-        // Emit event
+        // Emit task.created event
         const eventId = crypto.randomUUID();
         await run(env.DB,
           `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
@@ -215,11 +282,43 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
           [eventId, taskId, JSON.stringify({ source: "telegram_message", chatId, text: text.slice(0, 200) }), now, now],
         );
 
-        return c.json({ ok: true });
+        // ── Immediate DO dispatch (no 3-min cron wait) ───────────────────────────
+        try {
+          const sessionId = crypto.randomUUID();
+          await run(env.DB,
+            `INSERT INTO agent_sessions (id, agent_id, task_id, status, ws_connected, started_at, updated_at)
+             VALUES (?, ?, ?, 'running', 0, ?, ?)`,
+            [sessionId, agentId, taskId, now, now],
+          );
+          await run(env.DB,
+            `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+             VALUES (?, 'task.status_changed', ?, 'task', ?, ?, ?, ?, ?)`,
+            [
+              crypto.randomUUID(), agentId, taskId,
+              JSON.stringify({ from: "pending", to: "running", note: "dispatched immediately from telegram" }),
+              sessionId, now, now,
+            ],
+          );
+          const doId = env.AGENT_ACTOR.idFromName(agentId);
+          const stub = env.AGENT_ACTOR.get(doId);
+          await stub.fetch("https://do/enqueue", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId, sessionId }),
+          });
+        } catch (err) {
+          console.error(`[Telegram] Immediate DO dispatch failed for task ${taskId}:`, err);
+          // Cron scheduler will catch it as a fallback (still in 'running' state will be picked up
+          // by the watchdog or stuck-task recovery — operator sees no degradation)
+        }
+
+        return;
       }
     }
 
     // ── Route commands + simple/infrastructure queries through Nation Supervisor ──
+    // Log here — supervisor path; action/intel paths log above with their route metadata
+    void persistTelegramMessage(env.DB, "in", chatId, text, { userId, routeType: "supervisor" });
     console.log(`[Telegram] Routing message to Nation Supervisor: "${text}"`);
 
     try {
@@ -233,7 +332,7 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
       const botToken = env.TELEGRAM_BOT_TOKEN;
       if (!botToken) {
         console.error('[Telegram] TELEGRAM_BOT_TOKEN not set');
-        return c.json({ ok: true });
+        return;
       }
 
       const sendUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
@@ -255,8 +354,6 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
         logOutgoingResponse(chatId, response);
         void persistTelegramMessage(env.DB, "out", chatId, telegramMessage, { routeType: "supervisor" });
       }
-
-      return c.json({ ok: true });
     } catch (error) {
       console.error('[Telegram] Error in Nation Supervisor handler:', error instanceof Error ? error.message : error);
 
@@ -272,18 +369,20 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
           }),
         });
       }
-
-      return c.json({ ok: true });
     }
   }
 
   if (update.callback_query) {
-    await handleCallbackQuery(update.callback_query, env);
-    return c.json({ ok: true });
+    console.log(`[Webhook] callback_query update_id=${update.update_id}`);
+    try {
+      await handleCallbackQuery(update.callback_query, env);
+    } catch (err) {
+      console.error(`[Webhook] handleCallbackQuery threw:`, err);
+    }
+  } else if (!update.message) {
+    console.log(`[Webhook] unhandled update type, keys=${Object.keys(update).join(",")}`);
   }
-
-  return c.json({ ok: true });
-});
+}
 
 // ── Command dispatcher ────────────────────────────────────────────────────────
 
@@ -651,10 +750,12 @@ async function handleCallbackQuery(
   env: Env,
 ): Promise<void> {
   const { data } = cbq;
+  console.log(`[CallbackQuery] received id=${cbq.id} from=${cbq.from?.id} data=${data ?? "<none>"}`);
   if (!data) return;
 
   const parts = data.split(":");
   const prefix = parts[0];
+  console.log(`[CallbackQuery] prefix=${prefix} parts=${JSON.stringify(parts)}`);
 
   // ── Self-learning: learn:AGENT:KEY:VALUE ──────────────────────────────────
   // Emitted by intel/finance agents as inline keyboard buttons.
@@ -939,7 +1040,7 @@ async function handleCallbackQuery(
       return;
     }
 
-    // Approve — dispatch to GitHub Actions
+    // Approve — dispatch to GitHub Actions (idempotent: CAS pending_approval → dispatching)
     await answerCallback(env, cbq.id, "🚀 Dispatching…");
     const result = await dispatchChangeToGitHub(env, changeId);
     if (chatId) {
@@ -949,6 +1050,9 @@ async function handleCallbackQuery(
           `GitHub Actions is applying the change, running <code>wrangler deploy</code>, and will notify you here when done.\n` +
           `Expected: ~2 min`,
         );
+      } else if (result.alreadyDispatched) {
+        // Duplicate tap or replay — silently acknowledge, don't spam the chat
+        await answerCallback(env, cbq.id, "Already dispatching — ignored duplicate tap");
       } else {
         await sendMessage(env, chatId,
           `❌ <b>Dispatch failed</b>\n` +
@@ -1136,7 +1240,16 @@ async function handlePhotoMessage(
       `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`,
     );
     const imgBuffer = await imgRes.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(imgBuffer)));
+
+    // Chunked base64 encoding — spreading large Uint8Array as args causes
+    // "Maximum call stack size exceeded" on images > ~100KB.
+    const uint8 = new Uint8Array(imgBuffer);
+    let binary = "";
+    const CHUNK = 8192;
+    for (let i = 0; i < uint8.length; i += CHUNK) {
+      binary += String.fromCharCode(...uint8.subarray(i, i + CHUNK));
+    }
+    const base64 = btoa(binary);
 
     // Infer media type from file path extension
     const ext = fileData.result.file_path.split(".").pop()?.toLowerCase() ?? "jpg";
@@ -1758,6 +1871,7 @@ async function handleBaileyCommand(chatId: number, args: string[], env: Env): Pr
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface TelegramUpdate {
+  update_id?: number;
   message?: {
     message_id: number;
     text?: string;
