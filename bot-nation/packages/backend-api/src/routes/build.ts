@@ -521,13 +521,11 @@ buildRouter.post("/api/build/read-file", async (c) => {
   if (!body.path) return c.json({ error: "path is required" }, 400);
 
   const clean = body.path.replace(/^\.\//, "").replace(/\\/g, "/");
-  // Allow either bare (`packages/...`) or prefixed (`bot-nation/packages/...`) form
-  const checkPath = clean.startsWith("bot-nation/") ? clean.slice("bot-nation/".length) : clean;
-  if (!ALLOWED_PATH_PREFIXES.some((p) => checkPath.startsWith(p))) {
+  // Normalise to full repo path first, then check against allowed prefixes
+  const ghPath = toRepoPath(clean);
+  if (!ALLOWED_PATH_PREFIXES.some((p) => ghPath.startsWith(p))) {
     return c.json({ error: `Path not in allowed prefixes. Allowed: ${ALLOWED_PATH_PREFIXES.join(", ")}` }, 400);
   }
-
-  const ghPath = toRepoPath(clean);
   const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${ghPath}`;
   const resp = await fetch(apiUrl, {
     headers: {
