@@ -379,6 +379,11 @@ export class AgentActor implements DurableObject {
       "SELECT id, definition FROM agent_graphs WHERE agent_id = ? AND is_default = 1 LIMIT 1",
       [agentId],
     );
+    // code_change and config_change must bypass graph traversal — graph nodes don't enforce
+    // tool_choice:"required", so GLM-5/Qwen graphs emit narrative instead of calling
+    // submit_code_change. This mirrors the TOOL_FORCED_KINDS guard in flatToolLoop.
+    const GRAPH_BYPASS_KINDS = new Set(["code_change", "config_change"]);
+    const activeGraph = GRAPH_BYPASS_KINDS.has(task.kind) ? null : graphRow;
 
     // Parse task input
     let taskInput: { summary?: string; details?: string } = {};
@@ -412,7 +417,7 @@ export class AgentActor implements DurableObject {
       : "";
 
     // Emit session.started
-    await this.emitEvent(taskId, "session.started", { sessionId, agentId, graphId: graphRow?.id ?? null }, now);
+    await this.emitEvent(taskId, "session.started", { sessionId, agentId, graphId: activeGraph?.id ?? null }, now);
     await this.updateSession(sessionId, "running", now);
     this.broadcast(JSON.stringify({ type: "session_started", taskId, sessionId }));
 
@@ -422,8 +427,8 @@ export class AgentActor implements DurableObject {
 
     // Send initial ETA message to Telegram (only for tasks created from Telegram)
     const etaSeconds = TASK_ETA_SECONDS[task.kind] ?? 60;
-    const totalGraphNodes = graphRow
-      ? (JSON.parse(graphRow.definition) as GraphDefinition).nodes.filter((n) => n.kind !== "end").length
+    const totalGraphNodes = activeGraph
+      ? (JSON.parse(activeGraph.definition) as GraphDefinition).nodes.filter((n) => n.kind !== "end").length
       : 1;
     await this.editTelegramProgress(task, 0, totalGraphNodes, 0, etaSeconds, "Starting...");
 
@@ -439,9 +444,9 @@ export class AgentActor implements DurableObject {
     let providerUsed: "openrouter" | "anthropic" | "graph" = "graph";
     let actualModelUsed: string | undefined;
 
-    if (graphRow) {
+    if (activeGraph) {
       // ── Graph traversal ────────────────────────────────────────────────────
-      const graph = JSON.parse(graphRow.definition) as GraphDefinition;
+      const graph = JSON.parse(activeGraph.definition) as GraphDefinition;
       // Phase 1 Stability: Resume from checkpoint if retrying
       const resumeFromNodeId = task.retry_count > 0 && task.last_graph_node_id
         ? task.last_graph_node_id
@@ -449,7 +454,7 @@ export class AgentActor implements DurableObject {
       if (resumeFromNodeId) {
         console.log(`[AgentActor] Resuming task ${taskId} from checkpoint: ${resumeFromNodeId}`);
       }
-      const graphResult = await this.traverseGraph(graph, task, agent, notesText, memoriesText, childResultsText, taskId, sessionId, graphRow.id, modelConfig, executionStartMs, etaSeconds, resumeFromNodeId);
+      const graphResult = await this.traverseGraph(graph, task, agent, notesText, memoriesText, childResultsText, taskId, sessionId, activeGraph.id, modelConfig, executionStartMs, etaSeconds, resumeFromNodeId);
       finalText = graphResult.text;
       promptTokens = graphResult.promptTokens;
       completionTokens = graphResult.completionTokens;
@@ -476,8 +481,8 @@ export class AgentActor implements DurableObject {
 
     // Store cost artifact — tracks token usage for billing / observability
     const costArtifactId = crypto.randomUUID();
-    const modelUsed = graphRow
-      ? (JSON.parse(graphRow.definition) as GraphDefinition).nodes[0]?.model ?? modelConfig.model
+    const modelUsed = activeGraph
+      ? (JSON.parse(activeGraph.definition) as GraphDefinition).nodes[0]?.model ?? modelConfig.model
       : modelConfig.model;
     await run(
       this.env.DB,
