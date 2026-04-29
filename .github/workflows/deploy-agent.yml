@@ -64,23 +64,23 @@ jobs:
             "https://bot-nation-api.thejamalshackleford.workers.dev/api/build/change/${{ github.event.client_payload.change_id }}")
 
           echo "$CHANGE_DATA" | python3 <<'PYEOF'
-import json, sys, os
+          import json, sys, os
 
-data = json.loads(sys.stdin.read())
+          data = json.loads(sys.stdin.read())
 
-for f in data["files"]:
-    raw = f["path"].replace("\\", "/").lstrip("./")
-    if raw.startswith("bot-nation/"):
-        raw = raw[len("bot-nation/"):]
-    path = f"bot-nation/{raw}"
-    content = f["content"]
-    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(content)
-    print(f"  wrote: {path}")
+          for f in data["files"]:
+              raw = f["path"].replace("\\", "/").lstrip("./")
+              if raw.startswith("bot-nation/"):
+                  raw = raw[len("bot-nation/"):]
+              path = f"bot-nation/{raw}"
+              content = f["content"]
+              os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+              with open(path, "w", encoding="utf-8") as fh:
+                  fh.write(content)
+              print(f"  wrote: {path}")
 
-print(f"Applied {len(data['files'])} file(s)")
-PYEOF
+          print(f"Applied {len(data['files'])} file(s)")
+          PYEOF
 
       # ── 5. Install deps (pnpm workspace install from bot-nation root) ────────
       - name: Install dependencies
