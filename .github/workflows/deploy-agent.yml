@@ -59,47 +59,28 @@ jobs:
       # ── 4. Apply file changes ─────────────────────────────────────────────────
       - name: Apply file changes
         run: |
-          CHANGE_ID="${{ github.event.client_payload.change_id }}"
-          API_BASE="https://bot-nation-api.thejamalshackleford.workers.dev"
-          SECRET="${{ secrets.DEPLOY_WEBHOOK_SECRET }}"
+          CHANGE_DATA=$(curl -s -f \
+            -H "x-deploy-secret: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
+            "https://bot-nation-api.thejamalshackleford.workers.dev/api/build/change/${{ github.event.client_payload.change_id }}")
 
-          python3 - <<'PYEOF'
-          import urllib.request, json, os, base64
+          echo "$CHANGE_DATA" | python3 <<'PYEOF'
+import json, sys, os
 
-          change_id = os.environ.get("CHANGE_ID")
-          api_base  = os.environ.get("API_BASE")
-          secret    = os.environ.get("SECRET")
+data = json.loads(sys.stdin.read())
 
-          req = urllib.request.Request(
-              f"{api_base}/api/build/change/{change_id}",
-              headers={"x-deploy-secret": secret}
-          )
-          with urllib.request.urlopen(req) as r:
-              data = json.loads(r.read())
+for f in data["files"]:
+    raw = f["path"].replace("\\", "/").lstrip("./")
+    if raw.startswith("bot-nation/"):
+        raw = raw[len("bot-nation/"):]
+    path = f"bot-nation/{raw}"
+    content = f["content"]
+    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    print(f"  wrote: {path}")
 
-          # ── path normalization ──────────────────────────────────────────
-          # The Worker's path allowlist accepts either `packages/...`
-          # (bare, what the validator enforces) or `bot-nation/packages/...`
-          # (what some agent prompts emit). Either way, files belong under
-          # the bot-nation/ subdir on disk because that's the workspace root.
-          # Normalize: strip a leading `bot-nation/` if present, then prefix.
-          for f in data["files"]:
-              raw     = f["path"].replace("\\", "/").lstrip("./")
-              if raw.startswith("bot-nation/"):
-                  raw = raw[len("bot-nation/"):]
-              path    = f"bot-nation/{raw}"
-              content = f["content"]
-              os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-              with open(path, "w", encoding="utf-8") as fh:
-                  fh.write(content)
-              print(f"  wrote: {path}")
-
-          print(f"Applied {len(data['files'])} file(s)")
-          PYEOF
-        env:
-          CHANGE_ID: ${{ github.event.client_payload.change_id }}
-          API_BASE: "https://bot-nation-api.thejamalshackleford.workers.dev"
-          SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+print(f"Applied {len(data['files'])} file(s)")
+PYEOF
 
       # ── 5. Install deps (pnpm workspace install from bot-nation root) ────────
       - name: Install dependencies
