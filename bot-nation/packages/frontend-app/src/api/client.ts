@@ -198,6 +198,149 @@ export const stats = {
   get: () => request<Record<string, number>>("/api/stats"),
 };
 
+// ─── Nation ───────────────────────────────────────────────────────────────────
+
+export interface RoomStatusEntry {
+  task_count: number;
+  has_cron: boolean;
+  unlocked: boolean;
+  teams: Record<string, { task_count: number; has_cron: boolean }>;
+}
+
+export interface RoomStatusResponse {
+  rooms: Record<string, RoomStatusEntry>;
+  cron_agent_ids: string[];
+  generated_at: string;
+}
+
+export interface DeptSummary {
+  team: {
+    id: string;
+    name: string;
+    domain: string;
+    leadAgentId: string | null;
+    objectives: string | null;
+    policies: Record<string, unknown>;
+    memberCount: number;
+  };
+  agents: Array<{
+    id: string;
+    name: string;
+    role: string;
+    status: string;
+    capabilities: string[];
+    objectives: string | null;
+  }>;
+  tasks: Array<{
+    id: string;
+    kind: string;
+    status: string;
+    assignedAgentId: string | null;
+    summary: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  taskCounts: Record<string, number>;
+  proposals: Array<{
+    id: string;
+    type: string | null;
+    status: string;
+    risk_level: string | null;
+    created_at: string;
+  }>;
+  generatedAt: string;
+}
+
+export const nation = {
+  map:         () => request<unknown>("/api/nation/map"),
+  roomStatus:  () => request<RoomStatusResponse>("/api/nation/room-status"),
+  deptSummary: (teamId: string) => request<DeptSummary>(`/api/nation/dept-summary/${teamId}`),
+};
+
+// ─── Finance ──────────────────────────────────────────────────────────────────
+
+export interface SchwabPosition {
+  account_number:      string;
+  account_label:       string;
+  account_type:        string;
+  symbol:              string;
+  asset_type:          string;
+  description:         string;
+  quantity:            number;
+  average_price:       number;
+  market_value:        number;
+  cost_basis:          number;
+  unrealized_pnl:      number;
+  current_day_pnl:     number;
+  current_day_pnl_pct: number;
+  synced_at:           string;
+}
+
+export interface SchwabAccountSummary {
+  account_number:    string;
+  account_label:     string;
+  account_type:      string;
+  liquidation_value: number;
+  cash_balance:      number;
+  day_pnl:           number;
+  synced_at:         string;
+}
+
+export interface PortfolioTotals {
+  total_value:          number;
+  total_cash:           number;
+  total_invested:       number;
+  total_day_pnl:        number;
+  total_unrealized_pnl: number;
+}
+
+export interface SchwabQuote {
+  symbol:        string;
+  last_price:    number;
+  bid_price:     number;
+  ask_price:     number;
+  change_amount: number;
+  change_pct:    number;
+  volume:        number;
+  quote_time:    string;
+}
+
+export interface PriceTarget {
+  symbol:       string;
+  trend:        string;
+  daily_target: number;
+  weekly_target: number;
+  support:      number;
+  resistance:   number;
+  confidence:   number;
+  current_price: number;
+  reasoning:    string;
+  created_at:   string;
+}
+
+export const finance = {
+  positions: () =>
+    request<{ accounts: SchwabAccountSummary[]; positions: SchwabPosition[]; totals: PortfolioTotals; synced_at: string | null; count: number }>(
+      "/api/finance/positions",
+    ),
+  syncPositions: () =>
+    request<{ status: string; synced: string; accounts: number; positions: number; totals: PortfolioTotals }>(
+      "/api/finance/positions/sync",
+      { method: "POST" },
+    ),
+  quotes: (symbols?: string) =>
+    request<{ quotes: SchwabQuote[]; count: number; as_of: string }>(
+      `/api/finance/quotes${symbols ? `?symbols=${symbols}` : ""}`,
+    ),
+  targets: () =>
+    request<{ targets: PriceTarget[]; count: number }>("/api/finance/targets"),
+  refreshTargets: () =>
+    request<{ status: string; generated: number; targets: PriceTarget[] }>(
+      "/api/finance/targets/refresh",
+      { method: "POST" },
+    ),
+};
+
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 export const health = {

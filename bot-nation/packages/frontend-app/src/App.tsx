@@ -1,6 +1,7 @@
 import { NavLink, Outlet, Route, Routes } from "react-router-dom";
 import "./theme/styles.css";
 import { NationOverview } from "./pages/NationOverview";
+import { PokemonMap } from "./pages/PokemonMap";
 import { AgentsTeams } from "./pages/AgentsTeams";
 import { Proposals } from "./pages/Proposals";
 import { ApprovalsInbox } from "./pages/ApprovalsInbox";
@@ -10,9 +11,11 @@ import { Artifacts } from "./pages/Artifacts";
 import { GraphView } from "./pages/GraphView";
 import { Settings } from "./pages/Settings";
 import { AgentStream } from "./pages/AgentStream";
+import { FinanceDashboard } from "./pages/FinanceDashboard";
 
 const NAV = [
   { to: "/", icon: "⬡", label: "Overview", end: true },
+  { to: "/map", icon: "🗺", label: "Map" },
   { to: "/agents", icon: "◈", label: "Agents & Teams" },
   { to: "/proposals", icon: "◉", label: "Proposals" },
   { to: "/inbox", icon: "◎", label: "Approval Inbox" },
@@ -21,6 +24,7 @@ const NAV = [
   { to: "/artifacts", icon: "◫", label: "Artifacts" },
   { to: "/graph", icon: "⬡", label: "Graph" },
   { to: "/stream", icon: "⟳", label: "Live Stream" },
+  { to: "/finance", icon: "◈", label: "Finance" },
   { to: "/settings", icon: "⚙", label: "Settings" },
 ];
 
@@ -70,6 +74,7 @@ export function App() {
     <Routes>
       <Route path="/" element={<Layout />}>
         <Route index element={<NationOverview />} />
+        <Route path="map" element={<PokemonMap />} />
         <Route path="agents" element={<AgentsTeams />} />
         <Route path="proposals" element={<Proposals />} />
         <Route path="inbox" element={<ApprovalsInbox />} />
@@ -78,6 +83,7 @@ export function App() {
         <Route path="artifacts" element={<Artifacts />} />
         <Route path="graph" element={<GraphView />} />
         <Route path="stream" element={<AgentStream />} />
+        <Route path="finance" element={<FinanceDashboard />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>

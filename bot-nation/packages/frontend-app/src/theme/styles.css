@@ -308,3 +308,758 @@ tr:hover td { background: var(--bg-elevated); }
 /* ── Mono text ───────────────────────────────────────────────────────────────── */
 .mono { font-family: var(--font-mono); font-size: 12px; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   Pokemon Map
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Page wrapper ──────────────────────────────────────────────────────────── */
+.pokemon-map-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: var(--font-mono);
+  image-rendering: pixelated;
+  min-height: 0;
+}
+
+.map-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.map-error {
+  color: var(--red);
+  font-size: 12px;
+  padding: 6px 10px;
+  background: #2a0a0a;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Room nav bar ──────────────────────────────────────────────────────────── */
+.map-room-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.room-nav-btn {
+  padding: 4px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: #151e15;
+  border: 2px solid #2a4a2a;
+  color: #c8a84b;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  image-rendering: pixelated;
+}
+
+.room-nav-btn:hover {
+  background: #1e301e;
+  border-color: #4a8a4a;
+}
+
+.room-nav-btn.construction {
+  color: #ff8a2a;
+  border-color: #4a3010;
+  background: #1a1508;
+}
+
+.room-nav-btn.construction:hover {
+  background: #251e0a;
+  border-color: #8a6020;
+}
+
+/* ── Map + panel layout ────────────────────────────────────────────────────── */
+.map-and-panel {
+  display: flex;
+  gap: 0;
+  align-items: flex-start;
+  min-height: 0;
+  position: relative;
+}
+
+/* ── Pokemon Map grid ──────────────────────────────────────────────────────── */
+.pokemon-map {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, auto);
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  transition: margin-right 0.3s ease;
+}
+
+/* Room base */
+.map-room {
+  position: relative;
+  min-height: 160px;
+  padding: 10px;
+  border: 3px solid #2a4a2a;
+  box-shadow: inset 0 0 0 1px #3a6a3a;
+  border-radius: 2px;
+  /* checkerboard floor */
+  background:
+    repeating-conic-gradient(#1a2e1a 0% 25%, #1e341e 0% 50%)
+    0 0 / 16px 16px;
+  image-rendering: pixelated;
+}
+
+.map-room.room-highlight {
+  border-color: #c8a84b;
+  box-shadow: inset 0 0 0 1px #c8a84b, 0 0 12px #c8a84b44;
+  animation: room-flash 1.2s ease-out;
+}
+
+@keyframes room-flash {
+  0%   { box-shadow: inset 0 0 0 1px #c8a84b, 0 0 20px #c8a84b88; }
+  100% { box-shadow: inset 0 0 0 1px #3a6a3a; }
+}
+
+/* Under-construction rooms */
+.map-room-construction {
+  background: repeating-linear-gradient(
+    45deg,
+    #1a1a1a 0,
+    #1a1a1a 4px,
+    #111111 4px,
+    #111111 8px
+  );
+  border-color: #4a3010;
+  box-shadow: inset 0 0 0 1px #6a4a18;
+  opacity: 0.75;
+}
+
+.map-room-construction .construction-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: calc(100% - 28px);
+  gap: 6px;
+}
+
+.construction-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.construction-text {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #ff8a2a;
+  text-transform: uppercase;
+}
+
+.construction-team {
+  font-size: 9px;
+  color: #6a5020;
+  letter-spacing: 0.06em;
+}
+
+/* Hallway */
+.map-hallway {
+  background: #0e1510;
+  border: 2px solid #1a2a1a;
+  border-radius: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50px;
+}
+
+.hallway-label {
+  font-size: 10px;
+  color: #3a5a3a;
+  letter-spacing: 0.15em;
+  font-weight: 600;
+}
+
+/* Room label */
+.room-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #c8a84b;
+  margin-bottom: 10px;
+  text-shadow: 0 0 4px #c8a84b55;
+}
+
+.room-empty {
+  font-size: 9px;
+  color: #2a4a2a;
+  letter-spacing: 0.1em;
+}
+
+/* ── Agent sprites ──────────────────────────────────────────────────────────── */
+.room-sprites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.agent-sprite {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sprite-color) 25%, #0d0f14);
+  border: 2px solid var(--sprite-color);
+  color: var(--sprite-color);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 6px color-mix(in srgb, var(--sprite-color) 30%, transparent);
+  transition: transform 0.1s, box-shadow 0.2s;
+  image-rendering: pixelated;
+}
+
+.agent-sprite:hover {
+  transform: scale(1.15);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--sprite-color) 60%, transparent);
+}
+
+.agent-sprite.active {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.agent-sprite.error {
+  border-color: var(--red);
+  box-shadow: 0 0 8px #f0506066;
+}
+
+/* Status dot overlay */
+.sprite-status-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  bottom: -2px;
+  right: -2px;
+  border: 1px solid var(--bg-base);
+}
+
+.status-active { background: var(--green); }
+.status-error  { background: var(--red); }
+
+/* ── Animations ─────────────────────────────────────────────────────────────── */
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 0 4px color-mix(in srgb, var(--sprite-color) 30%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 16px color-mix(in srgb, var(--sprite-color) 80%, transparent),
+                0 0 28px color-mix(in srgb, var(--sprite-color) 40%, transparent);
+  }
+}
+
+@keyframes sprite-idle {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-2px); }
+}
+
+/* ── Agent Brief Panel ──────────────────────────────────────────────────────── */
+.agent-brief-panel {
+  position: fixed;
+  top: var(--header-h);
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  background: #0f1318;
+  border-left: 2px solid #2a4a2a;
+  box-shadow: -4px 0 20px #00000088;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  overflow-y: auto;
+  z-index: 50;
+  font-family: var(--font-mono);
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agent-brief-panel.open {
+  transform: translateX(0);
+}
+
+.brief-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: none;
+  border: 1px solid #2a4a2a;
+  color: #c8a84b;
+  width: 24px;
+  height: 24px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  transition: background 0.1s;
+}
+
+.brief-close:hover { background: #1e2a1e; }
+
+/* Brief header */
+.brief-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 32px;
+}
+
+.brief-sprite {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--sprite-color) 25%, #0d0f14);
+  border: 2px solid var(--sprite-color);
+  color: var(--sprite-color);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--sprite-color) 35%, transparent);
+}
+
+.brief-sprite.active {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.brief-agent-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.04em;
+}
+
+.brief-agent-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  letter-spacing: 0.06em;
+}
+
+/* Brief stats row */
+.brief-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #0d1510;
+  border: 1px solid #1e3a1e;
+  border-radius: 2px;
+}
+
+.brief-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.brief-stat-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #3a6a3a;
+  text-transform: uppercase;
+}
+
+.brief-stat-value {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* Brief sections */
+.brief-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.brief-section-title {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: #3a6a3a;
+  text-transform: uppercase;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #1e3a1e;
+}
+
+/* Task card */
+.brief-task-card {
+  padding: 10px;
+  background: #0d1510;
+  border: 1px solid #1e3a1e;
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.brief-task-kind {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.brief-task-summary {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.brief-task-time {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+/* Capabilities pills */
+.brief-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.brief-cap-pill {
+  padding: 2px 7px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  background: #0d1f0d;
+  border: 1px solid #2a4a2a;
+  color: #4a9a4a;
+  border-radius: 2px;
+  text-transform: lowercase;
+}
+
+/* Activity list */
+.brief-activity {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.brief-activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.brief-activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.brief-activity-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+/* Empty / no-data state */
+.brief-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  padding-top: 40px;
+}
+
+.brief-agent-id {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.brief-no-data {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Dept Brief Panel extras ─────────────────────────────────────────────────── */
+
+/* Dept panel slides in from the right but is offset when agent panel is also open */
+.dept-brief-panel {
+  right: 0;
+  border-left-color: #2a3a5a;
+}
+
+/* Mission objectives block */
+.dept-objectives {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  border-left: 2px solid #2a4a2a;
+  padding-left: 8px;
+}
+
+/* Agent roster */
+.dept-agent-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dept-agent-item { display: flex; }
+
+.dept-agent-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: 1px solid #1e2a1e;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 0.1s, border-color 0.1s;
+}
+.dept-agent-btn:hover { background: #1a2a1a; border-color: #3a5a3a; }
+
+.dept-agent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dept-agent-name { color: var(--text-primary); font-weight: 600; flex: 1; }
+.dept-agent-role { font-size: 9px; color: var(--text-muted); }
+
+.dept-lead-badge {
+  font-size: 8px;
+  font-weight: 700;
+  color: #c8a84b;
+  background: #2a2010;
+  border: 1px solid #5a4820;
+  border-radius: 2px;
+  padding: 1px 4px;
+  text-transform: uppercase;
+}
+
+/* Task list */
+.dept-task-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dept-task-item {
+  padding: 8px 10px;
+  background: #0d1510;
+  border: 1px solid #1e2a1e;
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dept-task-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dept-task-status {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 2px;
+  color: #000;
+  text-transform: uppercase;
+}
+
+.dept-task-kind {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  flex: 1;
+}
+
+.dept-task-link {
+  font-size: 11px;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0 2px;
+}
+.dept-task-link:hover { color: var(--green); }
+
+.dept-task-summary {
+  font-size: 10px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dept-task-time {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+/* Proposal list */
+.dept-proposal-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dept-proposal-item { display: flex; }
+
+.dept-proposal-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  padding: 5px 8px;
+  border: 1px solid #1e2a2e;
+  border-radius: 3px;
+  background: #0d1015;
+  width: 100%;
+  font-family: var(--font-mono);
+  transition: background 0.1s;
+}
+.dept-proposal-link:hover { background: #141c24; }
+
+.dept-proposal-type {
+  font-size: 10px;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.dept-proposal-status {
+  font-size: 8px;
+  color: #ffd700;
+  font-weight: 700;
+}
+
+.dept-proposal-risk {
+  font-size: 8px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+.dept-proposal-risk.risk-low    { background: #1a3a1a; color: var(--green); }
+.dept-proposal-risk.risk-medium { background: #3a2a10; color: #ff8a4a; }
+.dept-proposal-risk.risk-high   { background: #3a1010; color: #ff4a6e; }
+
+/* Room label as a clickable button */
+.room-label-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.room-label-btn:hover { color: var(--green); }
+
+/* ── Event Ticker ────────────────────────────────────────────────────────────── */
+.event-ticker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #0d1510;
+  border: 2px solid #1e3a1e;
+  border-radius: 2px;
+  padding: 6px 10px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.ticker-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--green);
+  text-transform: uppercase;
+  flex-shrink: 0;
+  padding-right: 8px;
+  border-right: 1px solid #1e3a1e;
+}
+
+.ticker-track {
+  overflow: hidden;
+  flex: 1;
+}
+
+.ticker-content {
+  display: inline-block;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #4a8a4a;
+  animation: ticker-scroll 30s linear infinite;
+}
+
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+/* ── Responsive ─────────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  .pokemon-map {
+    grid-template-columns: 1fr;
+  }
+
+  .map-room {
+    grid-area: unset !important;
+  }
+
+  .map-hallway {
+    grid-area: unset !important;
+    display: none;
+  }
+
+  .agent-brief-panel {
+    width: 100vw;
+  }
+}
