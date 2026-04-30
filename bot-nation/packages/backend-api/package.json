@@ -12,6 +12,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
     "@bot-nation/core-domain": "workspace:*",
+    "hono": "^4.12.8",
     "itty-router": "^5.0.18",
     "openai": "^6.33.0"
   },

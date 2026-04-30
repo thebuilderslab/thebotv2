@@ -23,6 +23,9 @@ importers:
       '@bot-nation/core-domain':
         specifier: workspace:*
         version: link:../core-domain
+      hono:
+        specifier: ^4.12.8
+        version: 4.12.15
       itty-router:
         specifier: ^5.0.18
         version: 5.0.23
@@ -981,6 +984,10 @@ packages:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
     engines: {node: '>=6.9.0'}
 
+  hono@4.12.15:
+    resolution: {integrity: sha512-qM0jDhFEaCBb4TxoW7f53Qrpv9RBiayUHo0S52JudprkhvpjIrGoU1mnnr29Fvd1U335ZFPZQY1wlkqgfGXyLg==}
+    engines: {node: '>=16.9.0'}
+
   itty-router@5.0.23:
     resolution: {integrity: sha512-i49WU+SNPrwOZA4Z61En1RYd5h2Lcqa+5IvCpMrNi4dxymzJK15ozUUnRrWIUAv95Zamd4eJPAot2UvHRrQg7w==}
 
@@ -1897,6 +1904,8 @@ snapshots:
     optional: true
 
   gensync@1.0.0-beta.2: {}
+
+  hono@4.12.15: {}
 
   itty-router@5.0.23: {}
 
