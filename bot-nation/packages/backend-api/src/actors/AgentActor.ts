@@ -32,6 +32,7 @@ import {
   formatMemoriesForPrompt,
   distillTaskOutput,
 } from "../services/memory-service";
+import { formatForTelegram, stripHtmlToPlain } from "../utils/telegram-format";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1438,21 +1439,104 @@ export class AgentActor implements DurableObject {
       replyMarkup = { inline_keyboard: baseButtons };
     }
 
-    try {
-      const msgPayload: Record<string, unknown> = {
-        chat_id: task.telegram_chat_id,
-        text,
-        parse_mode: "HTML",
-      };
-      if (replyMarkup) msgPayload.reply_markup = replyMarkup;
+    // ── R16: chunked send with fail-loud + plain-text fallback ───────────────
+    // The body produced above is one message; if its UTF-16 length blows past
+    // 4000, formatForTelegram chunks it. If any chunk fails HTML validation,
+    // every chunk downgrades to plain text. Send failures are persisted to
+    // the events table so silent drops surface in the supervisor digest.
+    const chunks: Array<{ text: string; parseMode: "HTML" | null }> =
+      text.length <= 4000
+        ? [{ text, parseMode: "HTML" as const }]
+        : formatForTelegram(text);
 
-      await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (!chunk) continue;
+      const isFirst = i === 0;
+
+      const payload: Record<string, unknown> = {
+        chat_id: task.telegram_chat_id,
+        text: chunk.text,
+      };
+      if (chunk.parseMode) payload.parse_mode = chunk.parseMode;
+      if (isFirst && replyMarkup) payload.reply_markup = replyMarkup;
+
+      const resp = await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(msgPayload),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(10_000),
+      }).catch((err) => {
+        console.error(`[editTelegramCompletion] fetch threw for ${task.id}:`, err);
+        return null;
       });
-    } catch { /* non-critical */ }
+
+      if (resp && resp.ok) continue;
+
+      const status = resp?.status ?? 0;
+      const errBody = resp ? await resp.text().catch(() => "") : "";
+      console.error(
+        `[editTelegramCompletion] HTML send failed for ${task.id} chunk ${i + 1}/${chunks.length}: ${status} ${errBody.slice(0, 200)}`,
+      );
+      const now1 = new Date().toISOString();
+      await run(
+        this.env.DB,
+        `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+         VALUES (?, 'telegram.send_failed', ?, 'task', ?, ?, NULL, ?, ?)`,
+        [
+          crypto.randomUUID(),
+          task.assigned_agent_id ?? null,
+          task.id,
+          JSON.stringify({
+            chunkIndex: i,
+            totalChunks: chunks.length,
+            status,
+            errBody: errBody.slice(0, 500),
+            parseMode: chunk.parseMode,
+          }),
+          now1,
+          now1,
+        ],
+      ).catch(() => { /* event log best-effort */ });
+
+      if (chunk.parseMode !== "HTML") continue;
+
+      // Plain-text retry — strip tags and try again with no parse_mode.
+      const plain = stripHtmlToPlain(chunk.text);
+      const retryPayload: Record<string, unknown> = {
+        chat_id: task.telegram_chat_id,
+        text: plain,
+      };
+      if (isFirst && replyMarkup) retryPayload.reply_markup = replyMarkup;
+
+      const retry = await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(retryPayload),
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => null);
+
+      if (retry && retry.ok) continue;
+
+      const retryStatus = retry?.status ?? 0;
+      console.error(
+        `[editTelegramCompletion] plain-text retry failed for ${task.id} chunk ${i + 1}: ${retryStatus}`,
+      );
+      const now2 = new Date().toISOString();
+      await run(
+        this.env.DB,
+        `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+         VALUES (?, 'telegram.send_failed.retry', ?, 'task', ?, ?, NULL, ?, ?)`,
+        [
+          crypto.randomUUID(),
+          task.assigned_agent_id ?? null,
+          task.id,
+          JSON.stringify({ chunkIndex: i, status: retryStatus }),
+          now2,
+          now2,
+        ],
+      ).catch(() => { /* event log best-effort */ });
+    }
   }
 
   private async tgEdit(chatId: number, messageId: number, text: string): Promise<void> {
