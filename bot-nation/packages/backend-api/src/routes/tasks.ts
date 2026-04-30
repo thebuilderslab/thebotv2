@@ -126,6 +126,7 @@ tasksRouter.post("/api/tasks", async (req, env) => {
     createdByAgentId?: string | null;
     assignedAgentId?: string | null;
     preferredTeamId?: string | null;
+    scheduled_for?: string | null;
   }>();
 
   if (!body.kind || !body.input?.summary) {
@@ -134,17 +135,19 @@ tasksRouter.post("/api/tasks", async (req, env) => {
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const scheduledFor = body.scheduled_for ?? null;
 
   await run(
     env.DB,
-    `INSERT INTO tasks (id, kind, status, created_by_agent_id, assigned_agent_id, input, created_at, updated_at)
-     VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)`,
+    `INSERT INTO tasks (id, kind, status, created_by_agent_id, assigned_agent_id, input, scheduled_for, created_at, updated_at)
+     VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?)`,
     [
       id,
       body.kind,
       body.createdByAgentId ?? null,
       body.assignedAgentId ?? null,
       JSON.stringify(body.input),
+      scheduledFor,
       now,
       now,
     ],
@@ -184,7 +187,13 @@ tasksRouter.post("/api/tasks", async (req, env) => {
   );
 
   return Response.json(
-    { id, status: "pending", assignedAgentId: route.agentId, teamId: route.teamId },
+    {
+      id,
+      status: "pending",
+      assignedAgentId: route.agentId,
+      teamId: route.teamId,
+      scheduled_for: scheduledFor,
+    },
     { status: 201 },
   );
 });

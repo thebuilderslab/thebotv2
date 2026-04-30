@@ -186,7 +186,9 @@ async function processWebhookUpdate(update: TelegramUpdate, env: Env): Promise<v
     {
       const intelUrls = text.match(INTEL_URL_PATTERN);
       if (intelUrls && intelUrls.length > 0) {
-        void persistTelegramMessage(env.DB, "in", chatId, text, { userId, routeType: "intel_url" });
+        void persistTelegramMessage(env.DB, "in", chatId, text, {
+          userId, routeType: "intel_url", messageId: update.message.message_id,
+        });
         await handleIntelReview(chatId, intelUrls, text, env);
         return;
       }
@@ -261,18 +263,49 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
           [taskId, kind, agentId, teamId, JSON.stringify({ summary: text, details: taskDetails }), chatId, now, now, now],
         );
 
-        // Update the in-log with route info
-        void persistTelegramMessage(env.DB, "in", chatId, text, { userId, taskId, routeType: "action", agentId });
-
-        // Send immediate acknowledgement
-        const ackText = `🔄 <b>On it</b> — routing to ${agentId}\n<code>${taskId}</code>`;
-        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: chatId, text: ackText, parse_mode: "HTML" }),
-          signal: AbortSignal.timeout(5000),
+        // Update the in-log with route info — include inbound Telegram message_id
+        // so future replies/threads can reference it.
+        const inboundMessageId = update.message.message_id;
+        void persistTelegramMessage(env.DB, "in", chatId, text, {
+          userId, taskId, routeType: "action", agentId, messageId: inboundMessageId,
         });
-        void persistTelegramMessage(env.DB, "out", chatId, ackText, { taskId, routeType: "action", agentId });
+
+        // Send immediate acknowledgement — threaded as a reply to the operator's
+        // original message so Telegram shows a reply chip. Capture the ack
+        // message_id back into tasks.telegram_message_id so AgentActor's
+        // progress updates EDIT this same threaded message instead of sending
+        // a fresh untethered stub.
+        const ackText = `🔄 <b>On it</b> — routing to ${agentId}\n<code>${taskId}</code>`;
+        let ackMessageId: number | undefined;
+        try {
+          const ackRes = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: ackText,
+              parse_mode: "HTML",
+              reply_to_message_id: inboundMessageId,
+              allow_sending_without_reply: true,
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+          if (ackRes.ok) {
+            const ackData = await ackRes.json<{ result?: { message_id?: number } }>();
+            ackMessageId = ackData?.result?.message_id;
+            if (ackMessageId) {
+              await run(env.DB,
+                "UPDATE tasks SET telegram_message_id=? WHERE id=?",
+                [ackMessageId, taskId],
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(`[Telegram] ack send failed for task ${taskId}:`, err);
+        }
+        void persistTelegramMessage(env.DB, "out", chatId, ackText, {
+          taskId, routeType: "action", agentId, messageId: ackMessageId,
+        });
 
         // Emit task.created event
         const eventId = crypto.randomUUID();
@@ -318,7 +351,10 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
 
     // ── Route commands + simple/infrastructure queries through Nation Supervisor ──
     // Log here — supervisor path; action/intel paths log above with their route metadata
-    void persistTelegramMessage(env.DB, "in", chatId, text, { userId, routeType: "supervisor" });
+    const supervisorInboundMessageId = update.message.message_id;
+    void persistTelegramMessage(env.DB, "in", chatId, text, {
+      userId, routeType: "supervisor", messageId: supervisorInboundMessageId,
+    });
     console.log(`[Telegram] Routing message to Nation Supervisor: "${text}"`);
 
     try {
@@ -343,16 +379,20 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
           chat_id: chatId,
           text: telegramMessage,
           parse_mode: 'HTML',
+          reply_to_message_id: supervisorInboundMessageId,
+          allow_sending_without_reply: true,
         }),
       });
 
-      const result = await sendResponse.json() as { ok?: boolean; description?: string };
+      const result = await sendResponse.json() as { ok?: boolean; description?: string; result?: { message_id?: number } };
       if (!result.ok) {
         console.error(`[Telegram] sendMessage failed: ${result.description}`);
       } else {
         console.log(`[Telegram] Message sent successfully to chat ${chatId}`);
         logOutgoingResponse(chatId, response);
-        void persistTelegramMessage(env.DB, "out", chatId, telegramMessage, { routeType: "supervisor" });
+        void persistTelegramMessage(env.DB, "out", chatId, telegramMessage, {
+          routeType: "supervisor", messageId: result.result?.message_id,
+        });
       }
     } catch (error) {
       console.error('[Telegram] Error in Nation Supervisor handler:', error instanceof Error ? error.message : error);
@@ -1089,9 +1129,19 @@ async function answerCallback(env: Env, callbackQueryId: string, text: string): 
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async function sendMessage(env: Env, chatId: number, text: string, replyMarkup?: object): Promise<void> {
+async function sendMessage(
+  env: Env,
+  chatId: number,
+  text: string,
+  replyMarkup?: object,
+  replyToMessageId?: number,
+): Promise<void> {
   const payload: Record<string, unknown> = { chat_id: chatId, text, parse_mode: "HTML" };
   if (replyMarkup) payload.reply_markup = replyMarkup;
+  if (replyToMessageId) {
+    payload.reply_to_message_id = replyToMessageId;
+    payload.allow_sending_without_reply = true;
+  }
   const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

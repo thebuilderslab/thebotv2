@@ -14,7 +14,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { query, queryOne, run } from "../db/schema";
 import { executeTool } from "../services/tool-executor";
-import { fetchQuotes, getStoredPositions } from "../services/schwab-positions";
+import { fetchQuotes, getStoredPositions, syncPositions } from "../services/schwab-positions";
 import { getAccessToken } from "../services/schwab-auth";
 import { stagePendingOrder } from "../services/schwab-orders";
 import { resolveModel, OPENROUTER_BASE_URL, OPENROUTER_APP_NAME, OPENROUTER_APP_URL } from "../services/model-router";
@@ -1632,6 +1632,13 @@ export class AgentActor implements DurableObject {
 
     if (clientId && clientSecret) {
       try {
+        // Force-sync positions from Schwab before reading — closes 4/27 stale-cache incident
+        // where bot answered HOLD on a position that had already been closed in TOS.
+        try {
+          await syncPositions(this.env.DB, clientId, clientSecret);
+        } catch {
+          // Schwab API hiccup → fall through to whatever's cached
+        }
         // Merge held symbols with core watchlist
         const { positions } = await getStoredPositions(this.env.DB);
         const heldSymbols   = positions.map((p) => p.symbol).filter((s) => s !== "VIX");

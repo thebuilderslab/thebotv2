@@ -566,6 +566,7 @@ export async function persistTelegramMessage(
     taskId?: string;
     routeType?: string;
     agentId?: string;
+    messageId?: number;
   } = {},
 ): Promise<void> {
   const id  = crypto.randomUUID();
@@ -573,8 +574,8 @@ export async function persistTelegramMessage(
   try {
     const { run } = await import("../db/schema");
     await run(db,
-      `INSERT INTO telegram_messages (id, direction, chat_id, user_id, text, task_id, route_type, agent_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO telegram_messages (id, direction, chat_id, user_id, text, task_id, route_type, agent_id, message_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         direction,
@@ -584,6 +585,7 @@ export async function persistTelegramMessage(
         options.taskId ?? null,
         options.routeType ?? null,
         options.agentId ?? null,
+        options.messageId ?? null,
         now,
       ],
     );

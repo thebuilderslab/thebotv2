@@ -24,6 +24,7 @@ export interface DedupSendOptions {
   hourBucket?: string;         // override; default = current hour ISO
   parseMode?: "HTML" | "Markdown" | "MarkdownV2";
   replyMarkup?: unknown;
+  replyToMessageId?: number;   // thread to a specific Telegram inbound message
 }
 
 export interface DedupSendResult {
@@ -78,6 +79,9 @@ export async function sendDedupedTelegram(
         text:         opts.text,
         parse_mode:   opts.parseMode ?? "HTML",
         ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+        ...(opts.replyToMessageId
+          ? { reply_to_message_id: opts.replyToMessageId, allow_sending_without_reply: true }
+          : {}),
       }),
       signal: AbortSignal.timeout(5_000),
     });

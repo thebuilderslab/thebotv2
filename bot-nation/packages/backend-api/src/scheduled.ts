@@ -840,6 +840,12 @@ async function sendSupervisorReminder(env: Env, now: string): Promise<void> {
                AND t2.created_at >= i.created_at
                AND t2.status IN ('running','completed','dispatched','dispatching','waiting_children')
            )
+           AND NOT EXISTS (
+             SELECT 1 FROM events e
+             WHERE e.kind = 'task.created'
+               AND json_extract(e.payload, '$.text') = substr(i.text, 1, 200)
+               AND e.created_at >= i.created_at
+           )
          ORDER BY i.created_at DESC LIMIT 5`,
         [cutoff4h, cutoff5m]),
 

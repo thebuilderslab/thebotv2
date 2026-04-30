@@ -39,7 +39,7 @@ export async function dispatchTextAsTask(
   env: Env,
   chatId: number | string,
   text: string,
-  options: { userId?: number | string; sendAck?: boolean; sourceLabel?: string } = {},
+  options: { userId?: number | string; sendAck?: boolean; sourceLabel?: string; inboundMessageId?: number } = {},
 ): Promise<DispatchResult> {
   const trimmed = text.trim();
 
@@ -92,20 +92,37 @@ STEP 4 — CALL submit_code_change with { files, commit_message, change_summary 
     taskId,
     routeType: options.sourceLabel ?? "action",
     agentId,
+    messageId: options.inboundMessageId,
   });
 
   if (options.sendAck !== false) {
     const ackText = `🔄 <b>On it</b> — routing to ${agentId}\n<code>${taskId}</code>`;
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const ackResp = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text: ackText, parse_mode: "HTML" }),
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: ackText,
+        parse_mode: "HTML",
+        ...(options.inboundMessageId
+          ? { reply_to_message_id: options.inboundMessageId, allow_sending_without_reply: true }
+          : {}),
+      }),
       signal: AbortSignal.timeout(5_000),
     });
+    let ackMsgId: number | undefined;
+    try {
+      const ackJson = (await ackResp.json()) as { ok?: boolean; result?: { message_id?: number } };
+      ackMsgId = ackJson?.result?.message_id;
+    } catch { /* ignore */ }
+    if (ackMsgId) {
+      await run(env.DB, "UPDATE tasks SET telegram_message_id=? WHERE id=?", [ackMsgId, taskId]);
+    }
     void persistTelegramMessage(env.DB, "out", chatId, ackText, {
       taskId,
       routeType: options.sourceLabel ?? "action",
       agentId,
+      messageId: ackMsgId,
     });
   }
 

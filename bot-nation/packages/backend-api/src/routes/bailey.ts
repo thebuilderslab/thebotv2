@@ -221,28 +221,38 @@ address,owner_name,phone,rented_units,total_units,equity_percent,estimated_value
 
 Return exactly 4 properties. Each property on new line.`;
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "perplexity/sonar-pro",
-        messages: [
-          {
-            role: "user",
-            content: searchPrompt,
-          },
-        ],
-        temperature: 0.7,
-        max_tokens: 1000,
-      }),
-    });
+    // Try sonar-pro-search first (web search enabled), fall back to sonar if 404/unavailable
+    const SEARCH_MODELS = [
+      "perplexity/sonar-pro-search",
+      "perplexity/sonar-pro",
+      "perplexity/sonar",
+    ];
 
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Search API error: ${response.status} - ${err}`);
+    let response: Response | null = null;
+    let lastErr = "";
+    for (const model of SEARCH_MODELS) {
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: searchPrompt }],
+          temperature: 0.7,
+          max_tokens: 1000,
+        }),
+      });
+      if (response.ok) break;
+      const errText = await response.text();
+      lastErr = `${model} → ${response.status}: ${errText.slice(0, 120)}`;
+      console.error(`[Bailey Search] Model failed: ${lastErr}`);
+      response = null;
+    }
+
+    if (!response) {
+      throw new Error(`All search models failed. Last error: ${lastErr}`);
     }
 
     const data = (await response.json()) as any;
@@ -380,12 +390,12 @@ baileyRouter.post("/api/bailey/execute/:id", async (req, env: Env) => {
       [JSON.stringify(output), now, taskId],
     );
 
-    // If HOT: queue for Retell voice call
+    // If HOT or WARM: queue for Naomi voice call (testing phase: SCORE >= 4)
     let retellCallId: string | null = null;
     let retellScheduled: string | null = null;
 
-    if (score.disposition === "hot") {
-      // Queue for Retell voice call if credentials exist
+    if (score.disposition === "hot" || score.disposition === "warm") {
+      // Queue for Naomi voice call if credentials exist (testing: WARM + HOT)
       if (env.RETELL_API_KEY && env.RETELL_AGENT_ID) {
         const callResult = await queueRetellVoiceCall(input, score, env.RETELL_API_KEY, taskId, env.RETELL_AGENT_ID);
         if (callResult) {

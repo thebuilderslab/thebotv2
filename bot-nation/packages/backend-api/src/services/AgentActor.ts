@@ -909,6 +909,12 @@ export class AgentActor implements DurableObject {
       "",
       "Complete the task given to you. Be concise and specific.",
       "",
+      "FORMATTING RULES (always follow):",
+      "- Never use markdown pipe tables (| col | col | format). They break on mobile.",
+      "- Use bullet points or numbered lists for all comparisons, rankings, and data.",
+      "- Use bold (**text**) for labels, not column headers.",
+      "- Keep each message under 4000 characters when sending to Telegram.",
+      "",
       "If you need to delegate to sub-tasks, output a SPAWN_TASKS block:",
       "<SPAWN_TASKS>[{\"kind\":\"research\",\"summary\":\"...\"}]</SPAWN_TASKS>",
     ].join("\n").trim();

@@ -106,11 +106,12 @@ Return ONLY valid JSON (no markdown, no backticks):
 
 /**
  * Disposition mapping for task routing
+ * TESTING PHASE: WARM (>= 4) also queued for voice calls
  */
 export function getNextTaskKind(disposition: "hot" | "warm" | "cold"): string | null {
   return {
-    hot: "seller_outbound_call",      // Queue for Retell voice
-    warm: "call_transcript_processor", // Review manually first
-    cold: null,                         // Archive
+    hot: "seller_outbound_call",       // SCORE >= 8: Queue for Naomi voice
+    warm: "seller_outbound_call",      // SCORE 4-7: Also queue for voice (testing phase)
+    cold: null,                         // SCORE < 4: Archive
   }[disposition] || null;
 }
