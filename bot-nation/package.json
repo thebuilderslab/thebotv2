@@ -9,5 +9,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {
+    "@types/papaparse": "^5.5.2",
+    "papaparse": "^5.5.3"
+  }
 }

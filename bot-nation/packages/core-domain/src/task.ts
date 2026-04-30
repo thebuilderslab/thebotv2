@@ -16,6 +16,8 @@ export type TaskKind =
   | "wallet_simulation"
   | "content_generation"
   | "research"
+  | "propstream_outbound_call"
+  | "propstream_lead_score"
   | "other";
 
 export interface TaskInput {
@@ -40,4 +42,5 @@ export interface Task extends WithMeta {
   input: TaskInput;
   output?: TaskOutput;
   approvalId?: ID;
+  scheduled_for?: string | null; // ISO 8601 timestamp for delayed execution
 }
