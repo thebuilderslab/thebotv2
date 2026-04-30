@@ -76,6 +76,11 @@ strips a "bot-nation/" prefix if present, but use the bare form):
 Call: read_github_file({ path: "<chosen file>" })
 
 STEP 2 — LOCATE THE CHANGE
+STEP 2.5 — IF EDITING <20% OF A FILE, USE edit_file_section INSTEAD of submit_code_change.
+  edit_file_section sends only { path, old_string, new_string } so the agent can't truncate
+  the file. The server REJECTS submit_code_change submissions that shrink an existing >8KB
+  file by >30% bytes AND >30% lines unless allow_large_truncation:true is passed with a
+  non-empty truncation_justification.
 STEP 3 — GENERATE MODIFIED FILE (full file, not a diff)
 STEP 4 — CALL submit_code_change with { files, commit_message, change_summary }`;
   }

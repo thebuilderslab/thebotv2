@@ -128,6 +128,109 @@ function isPathAllowed(p: string): boolean {
   return ALLOWED_PATH_PREFIXES.some((prefix) => clean.startsWith(prefix));
 }
 
+// ── R17 truncation guard ─────────────────────────────────────────────────────
+// Reject submit_code_change submissions that look like the agent stubbed out a
+// previously-large file. Three conditions must ALL hold for rejection:
+//   1. >30% byte shrinkage
+//   2. existing file is >8KB (small files can legitimately halve)
+//   3. >30% line deletion (catches stub rewrites; lets dense one-liner refactors
+//      that shrink chars but not lines through)
+// Override path: caller passes `allow_large_truncation:true` AND a non-empty
+// `truncation_justification` string. Both are logged to the audit trail.
+
+interface TruncationGuardResult {
+  ok: boolean;
+  rejection?: {
+    error: "truncation_guard";
+    file: string;
+    expected_bytes: number;
+    got_bytes: number;
+    shrinkage_pct: number;
+    expected_lines: number;
+    got_lines: number;
+    line_delete_pct: number;
+    hint: string;
+  };
+}
+
+async function fetchCurrentFileFromGitHub(
+  githubToken: string,
+  repoPath: string,
+): Promise<string | null> {
+  const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${repoPath}`;
+  const resp = await fetch(apiUrl, {
+    headers: {
+      "Authorization": `Bearer ${githubToken}`,
+      "Accept":        "application/vnd.github.raw+json",
+      "User-Agent":    "bot-nation-agent/1.0",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (resp.status === 404) return null; // new file — no baseline to compare
+  if (!resp.ok) throw new Error(`GitHub API ${resp.status} reading ${repoPath}`);
+  return await resp.text();
+}
+
+async function checkTruncationGuard(
+  env: Env,
+  files: Array<{ path: string; content: string }>,
+  allowLargeTruncation: boolean,
+): Promise<TruncationGuardResult> {
+  const githubToken = (env as unknown as Record<string, string>)["GITHUB_TOKEN"];
+  if (!githubToken) return { ok: true }; // nothing to compare against
+
+  for (const file of files) {
+    const repoPath = toRepoPath(file.path);
+    let currentContent: string | null;
+    try {
+      currentContent = await fetchCurrentFileFromGitHub(githubToken, repoPath);
+    } catch (err) {
+      console.warn(`[truncation_guard] could not read ${repoPath}, skipping check:`, err);
+      continue;
+    }
+    if (currentContent === null) continue; // new file
+
+    const enc = new TextEncoder();
+    const currentSize = enc.encode(currentContent).length;
+    const newSize = enc.encode(file.content).length;
+    const shrinkagePct = (currentSize - newSize) / currentSize;
+
+    const currentLines = currentContent.split("\n").length;
+    const newLines = file.content.split("\n").length;
+    const lineDeletePct = (currentLines - newLines) / currentLines;
+
+    const isSuspicious = shrinkagePct > 0.3 && currentSize > 8_000 && lineDeletePct > 0.3;
+
+    if (isSuspicious && !allowLargeTruncation) {
+      return {
+        ok: false,
+        rejection: {
+          error: "truncation_guard",
+          file: file.path,
+          expected_bytes: currentSize,
+          got_bytes: newSize,
+          shrinkage_pct: Math.round(shrinkagePct * 100),
+          expected_lines: currentLines,
+          got_lines: newLines,
+          line_delete_pct: Math.round(lineDeletePct * 100),
+          hint:
+            "Use edit_file_section (POST /api/build/edit-section) for surgical edits. " +
+            "If this is an intentional large refactor, pass allow_large_truncation:true with " +
+            "a non-empty truncation_justification.",
+        },
+      };
+    }
+
+    if (Math.abs(shrinkagePct) > 0.05 && Math.abs(shrinkagePct) < 0.3) {
+      console.log(
+        `[submit_code_change] substantial edit to ${file.path}: ${Math.round(shrinkagePct * 100)}% size, ${Math.round(lineDeletePct * 100)}% lines`,
+      );
+    }
+  }
+
+  return { ok: true };
+}
+
 // On GitHub the repo's true layout has everything under `bot-nation/`. Our
 // agent paths are bare (e.g. `packages/backend-api/src/foo.ts`) so we prefix
 // before any github API call. Accept either form from the agent.
@@ -148,6 +251,8 @@ buildRouter.post("/api/build/submit", async (c) => {
     change_summary?: string;   // agent-written plain-text description of what changed
     task_id?: string;
     chat_id?: string | number;
+    allow_large_truncation?: boolean;
+    truncation_justification?: string;
   };
 
   try {
@@ -173,6 +278,26 @@ buildRouter.post("/api/build/submit", async (c) => {
     if (!f.content) {
       return c.json({ error: `File content is empty for: ${f.path}` }, 400);
     }
+  }
+
+  // ── R17 truncation guard ──────────────────────────────────────────────────
+  // Reject suspicious large shrinkages unless caller explicitly opts in.
+  const allowLarge = body.allow_large_truncation === true
+    && typeof body.truncation_justification === "string"
+    && body.truncation_justification.trim().length > 0;
+  if (body.allow_large_truncation === true && !allowLarge) {
+    return c.json({
+      error: "truncation_justification required when allow_large_truncation:true",
+    }, 400);
+  }
+  const guard = await checkTruncationGuard(c.env, body.files, allowLarge);
+  if (!guard.ok && guard.rejection) {
+    return c.json(guard.rejection, 400);
+  }
+  if (allowLarge) {
+    console.warn(
+      `[submit_code_change] TRUNCATION OVERRIDE for [${body.files.map((f) => f.path).join(", ")}] — justification: ${body.truncation_justification}`,
+    );
   }
 
   const now = new Date().toISOString();

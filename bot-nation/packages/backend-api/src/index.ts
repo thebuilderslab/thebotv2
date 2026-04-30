@@ -23,6 +23,7 @@ import { twsRouter } from "./routes/thinkorswim";
 import { financeRouter } from "./routes/finance";
 import { schwabRouter } from "./routes/schwab";
 import { buildRouter } from "./routes/build";
+import { adminRouter } from "./routes/admin";
 import { scheduledHandler } from "./scheduled";
 export { AgentActor } from "./actors/AgentActor";
 
@@ -87,6 +88,9 @@ app.route("/", schwabRouter);
 // Build / self-modification pipeline (Hono native — /api/build/*)
 app.route("/", buildRouter);
 
+// Admin utilities (Hono native — /api/admin/*)
+app.route("/", adminRouter);
+
 // Legacy itty-router routes (forwarded as middleware)
 const legacyHandler = async (c: any) => {
   // c.req in Hono v4 is a HonoRequest wrapper — use c.req.raw for the native Request
@@ -115,6 +119,7 @@ const legacyHandler = async (c: any) => {
   if (pathname.startsWith("/api/propstream")) return propstreamRouter.fetch(raw, env, ctx);
   if (pathname.startsWith("/api/finance")) return financeRouter.fetch(raw, env, ctx);
   if (pathname.startsWith("/api/build")) return buildRouter.fetch(raw, env, ctx);
+  if (pathname.startsWith("/api/admin")) return adminRouter.fetch(raw, env, ctx);
   if (pathname === "/api/graph") return graphHandler(raw, env);
   if (pathname === "/api/stats") return statsHandler(raw, env);
 
