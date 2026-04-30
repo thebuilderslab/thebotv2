@@ -57,30 +57,14 @@ jobs:
           echo "Change fetched: $(echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('commit_message','?'))")"
 
       # ── 4. Apply file changes ─────────────────────────────────────────────────
+      # Pipe the change JSON straight to a checked-in Python script so YAML
+      # block-scalar / bash heredoc / Python indentation never collide.
       - name: Apply file changes
         run: |
-          CHANGE_DATA=$(curl -s -f \
+          curl -s -f \
             -H "x-deploy-secret: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}" \
-            "https://bot-nation-api.thejamalshackleford.workers.dev/api/build/change/${{ github.event.client_payload.change_id }}")
-
-          echo "$CHANGE_DATA" | python3 <<'PYEOF'
-import json, sys, os
-
-data = json.loads(sys.stdin.read())
-
-for f in data["files"]:
-    raw = f["path"].replace("\\", "/").lstrip("./")
-    if raw.startswith("bot-nation/"):
-        raw = raw[len("bot-nation/"):]
-    path = f"bot-nation/{raw}"
-    content = f["content"]
-    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(content)
-    print(f"  wrote: {path}")
-
-print(f"Applied {len(data['files'])} file(s)")
-PYEOF
+            "https://bot-nation-api.thejamalshackleford.workers.dev/api/build/change/${{ github.event.client_payload.change_id }}" \
+            | python3 .github/scripts/apply-bot-nation-changes.py
 
       # ── 5. Install deps (pnpm workspace install from bot-nation root) ────────
       - name: Install dependencies
