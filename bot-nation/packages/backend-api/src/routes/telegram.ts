@@ -1013,15 +1013,19 @@ async function handleCallbackQuery(
     return;
   }
 
-  // ── Follow-up: followup:AGENT_ID:ACTION:TASK_ID ───────────────────────────
+  // ── Follow-up: followup:AGENT_ID:ACTION:TASK_ID_PREFIX ────────────────────
   // User taps "📋 View breakdown" or "↩ Ask a follow-up" on a finance result.
+  // TASK_ID_PREFIX is the first 8 chars of the task UUID (see AgentActor.ts —
+  // full UUID puts callback_data over Telegram's 64-byte limit). Resolve the
+  // task by LIKE prefix; collisions across active tasks are astronomically
+  // unlikely for an ephemeral per-message button.
   if (prefix === "followup") {
-    const agentId = parts[1];
-    const action  = parts[2];
-    const taskId  = parts[3];
-    const chatId  = cbq.message?.chat.id;
+    const agentId    = parts[1];
+    const action     = parts[2];
+    const taskIdPfx  = parts[3];
+    const chatId     = cbq.message?.chat.id;
 
-    if (!agentId || !action || !taskId || !chatId) {
+    if (!agentId || !action || !taskIdPfx || !chatId) {
       await answerCallback(env, cbq.id, "❌ Invalid follow-up payload");
       return;
     }
@@ -1029,15 +1033,14 @@ async function handleCallbackQuery(
     await answerCallback(env, cbq.id, "⏳ Loading...");
 
     if (action === "view_breakdown") {
-      // Fetch the full task output from D1
       const taskRow = await queryOne<{ output: string | null; kind: string }>(
         env.DB,
-        `SELECT output, kind FROM tasks WHERE id = ? LIMIT 1`,
-        [taskId],
+        `SELECT output, kind FROM tasks WHERE id LIKE ? || '%' ORDER BY created_at DESC LIMIT 1`,
+        [taskIdPfx],
       );
 
       if (!taskRow || !taskRow.output) {
-        await sendMessage(env, chatId, `ℹ️ No breakdown available for task <code>${taskId}</code>`);
+        await sendMessage(env, chatId, `ℹ️ No breakdown available for task <code>${taskIdPfx}</code>`);
         return;
       }
 
@@ -1053,7 +1056,7 @@ async function handleCallbackQuery(
       await sendMessage(env, chatId,
         `↩ <b>Ask a follow-up</b>\n` +
         `Type your question and it will be sent to <code>${agentId}</code>.\n` +
-        `(Reference task: <code>${taskId}</code>)`
+        `(Reference task: <code>${taskIdPfx}</code>)`
       );
     }
     return;

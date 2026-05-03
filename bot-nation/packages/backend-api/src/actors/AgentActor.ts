@@ -1512,10 +1512,15 @@ export class AgentActor implements DurableObject {
         }
       }
 
-      // Build keyboard — add "Approve to execute" row if we staged an order
+      // Build keyboard — add "Approve to execute" row if we staged an order.
+      // Telegram limits callback_data to 64 bytes. Full task UUIDs blow past
+      // that ("followup:agent-finance-lead:view_breakdown:<36-char-uuid>" = 79
+      // bytes → BUTTON_DATA_INVALID, drops the entire body chunk). Slice to
+      // the first 8 hex chars; the followup handler resolves by LIKE prefix.
+      const taskIdShort = task.id.slice(0, 8);
       const baseButtons = [[
-        { text: "📋 View breakdown",  callback_data: `followup:${agentId}:view_breakdown:${task.id}` },
-        { text: "↩ Ask a follow-up", callback_data: `followup:${agentId}:ask_followup:${task.id}` },
+        { text: "📋 View breakdown",  callback_data: `followup:${agentId}:view_breakdown:${taskIdShort}` },
+        { text: "↩ Ask a follow-up", callback_data: `followup:${agentId}:ask_followup:${taskIdShort}` },
       ]];
 
       if (pendingOrderId) {
