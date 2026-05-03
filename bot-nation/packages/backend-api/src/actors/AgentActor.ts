@@ -1283,12 +1283,96 @@ export class AgentActor implements DurableObject {
       : formattedBody;
 
     // ── Edit the progress stub (if exists) ───────────────────────────────────
+    // PR A1: fail-loud on the completion ack. Previously this used tgEdit()
+    // which swallowed all errors with a bare try/catch — a non-2xx response
+    // meant the user never saw "done in Ns" and the failure was invisible.
     if (task.telegram_message_id) {
-      await this.tgEdit(
-        task.telegram_chat_id,
-        task.telegram_message_id,
-        `✅ <b>${escapeHtml(taskLabel)}</b> done in ${elapsedSeconds}s`,
-      );
+      const ackText = `✅ <b>${escapeHtml(taskLabel)}</b> done in ${elapsedSeconds}s`;
+      const ackResp = await fetch(
+        `https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/editMessageText`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: task.telegram_chat_id,
+            message_id: task.telegram_message_id,
+            text: ackText,
+            parse_mode: "HTML",
+          }),
+          signal: AbortSignal.timeout(10_000),
+        },
+      ).catch((err) => {
+        console.error(`[editTelegramCompletion] ack fetch threw for ${task.id}:`, err);
+        return null;
+      });
+
+      if (!ackResp || !ackResp.ok) {
+        const ackStatus = ackResp?.status ?? 0;
+        const ackErrBody = ackResp ? await ackResp.text().catch(() => "") : "";
+        console.error(
+          `[editTelegramCompletion] ack edit failed for ${task.id}: ${ackStatus} ${ackErrBody.slice(0, 200)}`,
+        );
+        const ackNow = new Date().toISOString();
+        await run(
+          this.env.DB,
+          `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+           VALUES (?, 'telegram.send_failed', ?, 'task', ?, ?, NULL, ?, ?)`,
+          [
+            crypto.randomUUID(),
+            task.assigned_agent_id ?? null,
+            task.id,
+            JSON.stringify({
+              phase: "completion_ack",
+              status: ackStatus,
+              errBody: ackErrBody.slice(0, 500),
+              parseMode: "HTML",
+            }),
+            ackNow,
+            ackNow,
+          ],
+        ).catch(() => { /* event log best-effort */ });
+
+        // Plain-text retry — strip tags and try the edit again with no parse_mode.
+        // Mirrors the body-send retry pattern below.
+        const ackPlain = stripHtmlToPlain(ackText);
+        const ackRetry = await fetch(
+          `https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/editMessageText`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: task.telegram_chat_id,
+              message_id: task.telegram_message_id,
+              text: ackPlain,
+            }),
+            signal: AbortSignal.timeout(10_000),
+          },
+        ).catch(() => null);
+
+        if (!ackRetry || !ackRetry.ok) {
+          const ackRetryStatus = ackRetry?.status ?? 0;
+          console.error(
+            `[editTelegramCompletion] ack plain-text retry failed for ${task.id}: ${ackRetryStatus}`,
+          );
+          const ackRetryNow = new Date().toISOString();
+          await run(
+            this.env.DB,
+            `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+             VALUES (?, 'telegram.send_failed.retry', ?, 'task', ?, ?, NULL, ?, ?)`,
+            [
+              crypto.randomUUID(),
+              task.assigned_agent_id ?? null,
+              task.id,
+              JSON.stringify({
+                phase: "completion_ack",
+                status: ackRetryStatus,
+              }),
+              ackRetryNow,
+              ackRetryNow,
+            ],
+          ).catch(() => { /* event log best-effort */ });
+        }
+      }
     }
 
     // ── Extract ACTION ITEM and move it to the top ────────────────────────────
