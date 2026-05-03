@@ -32,7 +32,11 @@ import {
   formatMemoriesForPrompt,
   distillTaskOutput,
 } from "../services/memory-service";
-import { formatForTelegram, stripHtmlToPlain } from "../utils/telegram-format";
+import {
+  escapeAgentHtml,
+  chunkPreRenderedTelegramHtml,
+  stripHtmlToPlain,
+} from "../utils/telegram-format";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1251,9 +1255,9 @@ export class AgentActor implements DurableObject {
     } catch { /* not JSON — use as-is */ }
 
     // ── Escape HTML special chars in plain-text sections ─────────────────────
-    // Only escape the body; our own <b> tags stay intact
-    const escapeHtml = (s: string) =>
-      s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // Use the canonical escapeAgentHtml from telegram-format so escaping is
+    // consistent across the renderer. Our own <b>/<code> tags applied below
+    // by markdownToHtml stay intact (escape runs FIRST on raw text).
 
     // Convert markdown to Telegram HTML (bold **x**, headers ## x, bullets)
     const markdownToHtml = (s: string): string =>
@@ -1267,7 +1271,7 @@ export class AgentActor implements DurableObject {
     const hasHtmlTags = /<b>/.test(body);
     const formattedBody = hasHtmlTags
       ? markdownToHtml(body)                        // already partially HTML
-      : markdownToHtml(escapeHtml(body));            // raw text — escape first
+      : markdownToHtml(escapeAgentHtml(body));      // raw text — escape first
 
     // Pull task summary label from input
     let taskLabel = task.kind;
@@ -1276,8 +1280,11 @@ export class AgentActor implements DurableObject {
       if (inp.summary) taskLabel = inp.summary;
     } catch { /* ignore */ }
 
-    // Trim to Telegram's 4096 char limit (leave room for header/footer)
-    const MAX_BODY = 3200;
+    // Cap pre-chunk body size. We rely on chunkPreRenderedTelegramHtml to
+    // split anything over Telegram's 4096-unit limit, so MAX_BODY is the
+    // upper bound on TOTAL output (~3 chunks). Was 3200 (single-chunk
+    // truncation) which silently dropped the tail of every long brief.
+    const MAX_BODY = 11800;
     const trimmedBody = formattedBody.length > MAX_BODY
       ? formattedBody.slice(0, MAX_BODY) + "\n<i>...truncated — see /status for full output</i>"
       : formattedBody;
@@ -1287,7 +1294,7 @@ export class AgentActor implements DurableObject {
     // which swallowed all errors with a bare try/catch — a non-2xx response
     // meant the user never saw "done in Ns" and the failure was invisible.
     if (task.telegram_message_id) {
-      const ackText = `✅ <b>${escapeHtml(taskLabel)}</b> done in ${elapsedSeconds}s`;
+      const ackText = `✅ <b>${escapeAgentHtml(taskLabel)}</b> done in ${elapsedSeconds}s`;
       const ackResp = await fetch(
         `https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/editMessageText`,
         {
@@ -1379,7 +1386,7 @@ export class AgentActor implements DurableObject {
     const actionItemMatch = trimmedBody.match(/---\s*\n(ACTION[^:]*:.*?)(?:\n|$)/i)
       ?? trimmedBody.match(/(ACTION ITEM:.*?)(?:\n──|$)/is);
     const actionLine = actionItemMatch
-      ? `🎯 <b>${escapeHtml((actionItemMatch[1] ?? "").replace(/^ACTION[^:]*:\s*/i, "ACTION: ").trim())}</b>\n`
+      ? `🎯 <b>${escapeAgentHtml((actionItemMatch[1] ?? "").replace(/^ACTION[^:]*:\s*/i, "ACTION: ").trim())}</b>\n`
       : "";
     // Strip ACTION ITEM and TRADE_ORDER block from body (both are surfaced elsewhere)
     const cleanBody = trimmedBody
@@ -1391,7 +1398,7 @@ export class AgentActor implements DurableObject {
     // ── Send the full result as a new notification ────────────────────────────
     const text =
       (actionLine ? actionLine + `──────────────────────\n` : "") +
-      `✅ <b>${escapeHtml(taskLabel)}</b> · ${elapsedSeconds}s\n` +
+      `✅ <b>${escapeAgentHtml(taskLabel)}</b> · ${elapsedSeconds}s\n` +
       `──────────────────────\n` +
       `${cleanBody}\n` +
       `──────────────────────\n` +
@@ -1533,15 +1540,18 @@ export class AgentActor implements DurableObject {
       replyMarkup = { inline_keyboard: baseButtons };
     }
 
-    // ── R16: chunked send with fail-loud + plain-text fallback ───────────────
-    // The body produced above is one message; if its UTF-16 length blows past
-    // 4000, formatForTelegram chunks it. If any chunk fails HTML validation,
-    // every chunk downgrades to plain text. Send failures are persisted to
-    // the events table so silent drops surface in the supervisor digest.
+    // ── R16 + PR A2: chunked send with fail-loud + plain-text fallback ──────
+    // `text` is already fully-rendered Telegram HTML (header + body + footer
+    // with our own <b>/<code>, plus user content escaped exactly once via
+    // escapeAgentHtml above). chunkPreRenderedTelegramHtml only splits on
+    // UTF-16 boundaries — it does NOT re-escape, which was the PR A2 bug
+    // class (formatForTelegram was double-escaping our tags into &lt;b&gt;
+    // and triple-escaping `&` into `&amp;amp;`). Send failures still hit
+    // the plain-text retry path below, so HTML rejection isn't silent.
     const chunks: Array<{ text: string; parseMode: "HTML" | null }> =
       text.length <= 4000
         ? [{ text, parseMode: "HTML" as const }]
-        : formatForTelegram(text);
+        : chunkPreRenderedTelegramHtml(text);
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];

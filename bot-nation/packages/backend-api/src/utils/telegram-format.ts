@@ -12,9 +12,30 @@
 export interface TelegramChunk {
   text: string;
   parseMode: "HTML" | null;
+  index?: number;
+  total?: number;
 }
 
 const MAX_CHUNK_LENGTH = 4000;
+
+/**
+ * Chunk an already-rendered Telegram HTML string. Used by the long-message
+ * path in AgentActor where the body has been built once with our own
+ * <b>/<code>/<i> tags + escaped user text. Re-running formatForTelegram here
+ * was double-escaping (`<b>` → `&lt;b&gt;` visible in chat). This helper
+ * does NO additional escaping and NO action-block stripping — caller owns
+ * that. It just chunks at UTF-16 boundaries (preferring newline breaks)
+ * and tags each chunk with parseMode HTML so the sender keeps that mode.
+ */
+export function chunkPreRenderedTelegramHtml(html: string): TelegramChunk[] {
+  const chunks = chunkByUtf16Length(html, MAX_CHUNK_LENGTH);
+  return chunks.map((text, i) => ({
+    text,
+    parseMode: "HTML" as const,
+    index: i,
+    total: chunks.length,
+  }));
+}
 
 /** Strip the existing ACTION-block + TRADE_ORDER markers (mirrors AgentActor.ts:1295). */
 function stripActionBlocks(raw: string): string {
