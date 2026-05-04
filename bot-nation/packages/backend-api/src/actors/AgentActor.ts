@@ -197,6 +197,9 @@ export class AgentActor implements DurableObject {
     if (url.pathname === "/ws") return this.handleWebSocket(request);
     if (url.pathname === "/enqueue" && request.method === "POST") return this.handleEnqueue(request);
     if (url.pathname === "/status") return this.handleStatus();
+    if (url.pathname === "/replay-completion" && request.method === "POST") {
+      return this.handleReplayCompletion(request);
+    }
 
     return new Response("Not Found", { status: 404 });
   }
@@ -249,6 +252,223 @@ export class AgentActor implements DurableObject {
       isRunning: this.isRunning,
       queueLength: this.taskQueue.length,
       wsConnections: this.state.getWebSockets().length,
+    });
+  }
+
+  // ── PR A3: Minimal Replay ───────────────────────────────────────────────────
+  // Re-delivers a completed task's body to its Telegram chat without
+  // regenerating the agent run. Reuses the PR A2-verified render+chunk+send
+  // pipeline (escapeAgentHtml + markdownToHtml + chunkPreRenderedTelegramHtml).
+  //
+  // Intentionally minimal:
+  //   • body chunks only — does NOT re-edit the original ack at telegram_message_id
+  //   • does NOT re-stage trade orders or attach the learning keyboard
+  //   • does NOT touch the deferred actionLine extraction (A.5a-followup)
+  //   • emits telegram.replay on success, telegram.replay_failed on hard failure
+  //
+  // The send loop intentionally duplicates the editTelegramCompletion send
+  // path rather than extracting a shared helper — A.5a forbids delivery
+  // service extraction and the duplication isolates replay from any future
+  // regression in the live completion path.
+  private async handleReplayCompletion(request: Request): Promise<Response> {
+    if (!this.env.TELEGRAM_BOT_TOKEN) {
+      return Response.json({ error: "TELEGRAM_BOT_TOKEN not configured" }, { status: 500 });
+    }
+
+    let body: { taskId?: string };
+    try {
+      body = await request.json<{ taskId?: string }>();
+    } catch {
+      return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    }
+    const taskId = body.taskId;
+    if (!taskId) return Response.json({ error: "taskId required" }, { status: 400 });
+
+    const task = await queryOne<TaskRow>(
+      this.env.DB,
+      "SELECT id, kind, input, output, parent_task_id, spawn_depth, telegram_chat_id, telegram_message_id, started_at, retry_count, max_retries, last_graph_node_id, assigned_agent_id, handoff_to, handoff_from, handoff_context, state_snapshot FROM tasks WHERE id = ?",
+      [taskId],
+    );
+    if (!task) return Response.json({ error: "task not found" }, { status: 404 });
+    if (!task.telegram_chat_id) {
+      return Response.json({ error: "task has no telegram_chat_id" }, { status: 400 });
+    }
+    if (!task.output) {
+      return Response.json({ error: "task has no output to replay" }, { status: 400 });
+    }
+
+    // ── Resolve canonical body text ──────────────────────────────────────────
+    // Finance briefs store {summary, artifactIds:[...]} in task.output and
+    // park the full body in the artifacts table. Follow the artifact ref so
+    // replay re-delivers the actual brief, not the wrapper summary.
+    let rawOutput = task.output;
+    try {
+      const parsed = JSON.parse(task.output) as { artifactIds?: unknown };
+      if (Array.isArray(parsed.artifactIds) && parsed.artifactIds.length > 0) {
+        const firstId = parsed.artifactIds[0];
+        if (typeof firstId === "string" && firstId.length > 0) {
+          const art = await queryOne<{ content: string }>(
+            this.env.DB,
+            "SELECT content FROM artifacts WHERE id = ? LIMIT 1",
+            [firstId],
+          );
+          if (art && art.content) rawOutput = art.content;
+        }
+      }
+    } catch { /* not JSON — use task.output as-is */ }
+
+    // ── Build the body via the same pipeline editTelegramCompletion uses ────
+    // (Inline duplication — see comment above this method.)
+    let bodyText = rawOutput.trim();
+
+    try {
+      const parsed = JSON.parse(bodyText) as Record<string, unknown>;
+      if (typeof parsed === "object" && parsed !== null) {
+        const parts: string[] = [];
+        if (parsed.executiveSummary && typeof parsed.executiveSummary === "object") {
+          const es = parsed.executiveSummary as Record<string, string>;
+          if (es.status)   parts.push(`<b>Status:</b> ${es.status}`);
+          if (es.priority) parts.push(`<b>Priority:</b> ${es.priority}`);
+          if (es.action)   parts.push(`<b>Action:</b> ${es.action}`);
+          if (es.risks && es.risks.toLowerCase() !== "none") {
+            parts.push(`<b>Risk:</b> ${es.risks}`);
+          }
+        }
+        if (typeof parsed.fullReport === "string" && parsed.fullReport.trim()) {
+          if (parts.length > 0) parts.push("──────────────────────");
+          parts.push(parsed.fullReport.trim());
+        } else if (typeof parsed.response === "string" && parsed.response.trim()) {
+          parts.push(parsed.response.trim());
+        }
+        bodyText = parts.join("\n") || bodyText;
+      }
+    } catch { /* not JSON — use as-is */ }
+
+    const markdownToHtml = (s: string): string =>
+      s
+        .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+        .replace(/^#{1,3}\s+(.+)$/gm, "<b>$1</b>")
+        .replace(/^[-•]\s+/gm, "• ")
+        .replace(/\[URGENT\]/g, "🔴 <b>URGENT</b>");
+
+    const hasHtmlTags = /<b>/.test(bodyText);
+    const formattedBody = hasHtmlTags
+      ? markdownToHtml(bodyText)
+      : markdownToHtml(escapeAgentHtml(bodyText));
+
+    let taskLabel = task.kind;
+    try {
+      const inp = JSON.parse(task.input) as { summary?: string };
+      if (inp.summary) taskLabel = inp.summary;
+    } catch { /* ignore */ }
+
+    const MAX_BODY = 11800;
+    const trimmedBody = formattedBody.length > MAX_BODY
+      ? formattedBody.slice(0, MAX_BODY) + "\n<i>...truncated — see /status for full output</i>"
+      : formattedBody;
+
+    // Strip TRADE_ORDER + ACTION blocks (they were surfaced once on completion;
+    // replay shouldn't double-surface them, and trade orders MUST NOT re-stage).
+    const cleanBody = trimmedBody
+      .replace(/---\s*\nACTION[^:]*:.*?(?=\n──|$)/is, "")
+      .replace(/ACTION ITEM:.*?(?=\n|$)/ig, "")
+      .replace(/##TRADE_ORDER##[\s\S]*?##END_TRADE_ORDER##/g, "")
+      .trim();
+
+    const text =
+      `🔁 <b>Replay:</b> <i>${escapeAgentHtml(taskLabel)}</i>\n` +
+      `──────────────────────\n` +
+      `${cleanBody}\n` +
+      `──────────────────────\n` +
+      `<code>/status ${task.id}</code>`;
+
+    const chunks: Array<{ text: string; parseMode: "HTML" | null }> =
+      text.length <= 4000
+        ? [{ text, parseMode: "HTML" as const }]
+        : chunkPreRenderedTelegramHtml(text);
+
+    const sentChunks: number[] = [];
+    let firstFailure: { chunkIndex: number; status: number; errBody: string } | null = null;
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (!chunk) continue;
+
+      const payload: Record<string, unknown> = {
+        chat_id: task.telegram_chat_id,
+        text: chunk.text,
+      };
+      if (chunk.parseMode) payload.parse_mode = chunk.parseMode;
+
+      const resp = await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10_000),
+      }).catch((err) => {
+        console.error(`[handleReplayCompletion] fetch threw for ${task.id}:`, err);
+        return null;
+      });
+
+      if (resp && resp.ok) {
+        sentChunks.push(i);
+        continue;
+      }
+
+      const status = resp?.status ?? 0;
+      const errBody = resp ? await resp.text().catch(() => "") : "";
+      console.error(
+        `[handleReplayCompletion] HTML send failed for ${task.id} chunk ${i + 1}/${chunks.length}: ${status} ${errBody.slice(0, 200)}`,
+      );
+
+      // Plain-text retry — strip tags and try again with no parse_mode.
+      if (chunk.parseMode === "HTML") {
+        const plain = stripHtmlToPlain(chunk.text);
+        const retry = await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: task.telegram_chat_id, text: plain }),
+          signal: AbortSignal.timeout(10_000),
+        }).catch(() => null);
+        if (retry && retry.ok) {
+          sentChunks.push(i);
+          continue;
+        }
+      }
+
+      if (!firstFailure) {
+        firstFailure = { chunkIndex: i, status, errBody: errBody.slice(0, 500) };
+      }
+    }
+
+    const now = new Date().toISOString();
+    if (firstFailure) {
+      await this.emitEvent(task.id, "telegram.replay_failed", {
+        chunkIndex:   firstFailure.chunkIndex,
+        totalChunks:  chunks.length,
+        sentChunks:   sentChunks.length,
+        status:       firstFailure.status,
+        errBody:      firstFailure.errBody,
+      }, now).catch(() => { /* event log best-effort */ });
+      return Response.json({
+        ok: false,
+        taskId: task.id,
+        totalChunks: chunks.length,
+        sentChunks:  sentChunks.length,
+        failure:     firstFailure,
+      }, { status: 502 });
+    }
+
+    await this.emitEvent(task.id, "telegram.replay", {
+      totalChunks: chunks.length,
+      sentChunks:  sentChunks.length,
+    }, now).catch(() => { /* event log best-effort */ });
+
+    return Response.json({
+      ok: true,
+      taskId: task.id,
+      totalChunks: chunks.length,
+      sentChunks:  sentChunks.length,
     });
   }
 
