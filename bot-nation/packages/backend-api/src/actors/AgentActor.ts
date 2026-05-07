@@ -90,6 +90,79 @@ interface GraphState {
   taskSummary: string;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Phase A.5a-followup helpers (extracted pure functions for testability)
+// ────────────────────────────────────────────────────────────────────────────
+//
+// Two production failures on 2026-05-07 motivated this extraction:
+//
+// 1. Literal `<b>...</b>` text leaked into Telegram for tasks whose agent
+//    output started with "ACTION ITEM:". Root cause: the second actionItem
+//    regex used the `s` (dotall) flag combined with a `\n──` lookahead that
+//    is NEVER present in trimmedBody (dividers are injected later in the
+//    final assembly). With `s`, `.` matched newlines, so the non-greedy
+//    `.*?` extended to EOF, capturing the entire post-ACTION body —
+//    including <b>...</b> tags markdownToHtml had already produced from
+//    the body's `**X**` markdown. escapeAgentHtml then escaped those tags
+//    to `&lt;b&gt;`, and Telegram displayed the literal text.
+//
+// 2. The 14:30 ET midday-trading-analysis brief rendered as a completely
+//    empty Telegram message between dividers. Root cause: the agent
+//    produced finalText="" (artifact stored as `{"response":""}`), the
+//    body-build pipeline correctly produced an empty cleanBody, but the
+//    final text assembly emitted "<dividers>\n\n<dividers>" with nothing
+//    in between — confusing for the operator who saw a completed task
+//    with no visible result.
+//
+// Both fixes are local regex/string adjustments; no architectural change.
+// Helpers are exported so verify-a5a-followup-fixture.mjs can exercise
+// them in isolation against the exact production-failure cases.
+
+/**
+ * Extract the ACTION line from a body and return it as the rendered
+ * Telegram action header (`🎯 <b>...</b>\n`), or "" if no action present.
+ *
+ * Single-line capture: regex no longer uses the `s` flag and terminates
+ * at the FIRST newline, so it can never include later body content (and
+ * therefore can never contain markdownToHtml-rendered `<b>...</b>` tags
+ * that escapeAgentHtml would then escape into a visible literal).
+ */
+export function extractActionLine(trimmedBody: string): string {
+  const m =
+    trimmedBody.match(/---\s*\n(ACTION[^:]*:.*?)(?:\n|$)/i) ??
+    trimmedBody.match(/(ACTION ITEM:.*?)(?:\n|$)/i);
+  if (!m) return "";
+  const raw = (m[1] ?? "").replace(/^ACTION[^:]*:\s*/i, "ACTION: ").trim();
+  if (!raw) return "";
+  return `🎯 <b>${escapeAgentHtml(raw)}</b>\n`;
+}
+
+/**
+ * Strip ACTION/TRADE_ORDER blocks from the body before final assembly.
+ * Sibling fix to extractActionLine — drops the `s` flag and uses `\n`
+ * instead of `\n──` as the terminator so the strip is bounded to the
+ * action line and never collapses the entire body.
+ */
+export function stripActionAndTradeOrderBlocks(body: string): string {
+  return body
+    .replace(/---\s*\nACTION[^:]*:.*?(?=\n|$)/i, "")
+    .replace(/ACTION ITEM:.*?(?=\n|$)/gi, "")
+    .replace(/##TRADE_ORDER##[\s\S]*?##END_TRADE_ORDER##/g, "")
+    .trim();
+}
+
+/**
+ * When the post-strip body is empty (agent produced no content, or
+ * stripping removed everything), surface a fallback notice so operators
+ * see SOMETHING actionable instead of a blank Telegram message between
+ * dividers. Includes the task ID so they can run /status for diagnostic.
+ */
+export function renderBodyWithFallback(cleanBody: string, taskId: string): string {
+  return cleanBody.length > 0
+    ? cleanBody
+    : `<i>(agent produced no content — see <code>/status ${taskId}</code> for diagnostic)</i>`;
+}
+
 // ── ETA lookup by task kind (seconds) ────────────────────────────────────────
 const TASK_ETA_SECONDS: Record<string, number> = {
   research:             75,
@@ -367,18 +440,16 @@ export class AgentActor implements DurableObject {
       ? formattedBody.slice(0, MAX_BODY) + "\n<i>...truncated — see /status for full output</i>"
       : formattedBody;
 
-    // Strip TRADE_ORDER + ACTION blocks (they were surfaced once on completion;
-    // replay shouldn't double-surface them, and trade orders MUST NOT re-stage).
-    const cleanBody = trimmedBody
-      .replace(/---\s*\nACTION[^:]*:.*?(?=\n──|$)/is, "")
-      .replace(/ACTION ITEM:.*?(?=\n|$)/ig, "")
-      .replace(/##TRADE_ORDER##[\s\S]*?##END_TRADE_ORDER##/g, "")
-      .trim();
+    // A.5a-followup: same single-line strip as editTelegramCompletion (the
+    // PR A3 replay path duplicated the original buggy regex; helper now
+    // shared so both paths stay in lock-step).
+    const cleanBody    = stripActionAndTradeOrderBlocks(trimmedBody);
+    const renderedBody = renderBodyWithFallback(cleanBody, task.id);
 
     const text =
       `🔁 <b>Replay:</b> <i>${escapeAgentHtml(taskLabel)}</i>\n` +
       `──────────────────────\n` +
-      `${cleanBody}\n` +
+      `${renderedBody}\n` +
       `──────────────────────\n` +
       `<code>/status ${task.id}</code>`;
 
@@ -1602,25 +1673,19 @@ export class AgentActor implements DurableObject {
       }
     }
 
-    // ── Extract ACTION ITEM and move it to the top ────────────────────────────
-    const actionItemMatch = trimmedBody.match(/---\s*\n(ACTION[^:]*:.*?)(?:\n|$)/i)
-      ?? trimmedBody.match(/(ACTION ITEM:.*?)(?:\n──|$)/is);
-    const actionLine = actionItemMatch
-      ? `🎯 <b>${escapeAgentHtml((actionItemMatch[1] ?? "").replace(/^ACTION[^:]*:\s*/i, "ACTION: ").trim())}</b>\n`
-      : "";
-    // Strip ACTION ITEM and TRADE_ORDER block from body (both are surfaced elsewhere)
-    const cleanBody = trimmedBody
-      .replace(/---\s*\nACTION[^:]*:.*?(?=\n──|$)/is, "")
-      .replace(/ACTION ITEM:.*?(?=\n|$)/ig, "")
-      .replace(/##TRADE_ORDER##[\s\S]*?##END_TRADE_ORDER##/g, "")
-      .trim();
+    // ── A.5a-followup: extract action header, strip blocks, fall back when empty
+    // Helpers are exported pure functions at module scope; see their JSDoc for
+    // the failure-mode history that motivated the extraction.
+    const actionLine   = extractActionLine(trimmedBody);
+    const cleanBody    = stripActionAndTradeOrderBlocks(trimmedBody);
+    const renderedBody = renderBodyWithFallback(cleanBody, task.id);
 
     // ── Send the full result as a new notification ────────────────────────────
     const text =
       (actionLine ? actionLine + `──────────────────────\n` : "") +
       `✅ <b>${escapeAgentHtml(taskLabel)}</b> · ${elapsedSeconds}s\n` +
       `──────────────────────\n` +
-      `${cleanBody}\n` +
+      `${renderedBody}\n` +
       `──────────────────────\n` +
       `<code>/status ${task.id}</code>`;
 
