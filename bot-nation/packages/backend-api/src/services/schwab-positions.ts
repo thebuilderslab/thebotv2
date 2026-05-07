@@ -81,6 +81,40 @@ interface SchwabPositionRaw {
   instrument?:                     SchwabInstrument;
 }
 
+/**
+ * Compute quantity, cost basis, and unrealized P&L for a Schwab raw position.
+ *
+ * Schwab returns:
+ *   - `averagePrice` in PER-SHARE terms (e.g., $0.52 for an option premium).
+ *   - `marketValue`  in PER-CONTRACT terms (e.g., $28.00 for a 1-contract
+ *     option position trading at $0.27, since one option contract represents
+ *     100 shares).
+ *
+ * The pre-fix code multiplied `qty * averagePrice` for cost basis without
+ * the 100x contract multiplier, which produced sign-flipped or wildly
+ * inflated unrealized P&L for options. Example (TSLA 260515C00480000,
+ * qty=1, avg=$0.52, mark=$0.27, marketValue=$28):
+ *   broken: costBasis=$0.52, unrealizedPnl = $28 - $0.52 = +$27.48 (wrong)
+ *   fixed : costBasis=$52,   unrealizedPnl = $28 - $52   = -$24    (matches TOS -$24.66 within rounding)
+ *
+ * Equities don't have the 100x mismatch — Schwab's marketValue already
+ * equals shares × price, and averagePrice is also per-share, so the
+ * multiplier is 1.
+ *
+ * Exported for testability — exercised by verify-schwab-options-fixture.mjs.
+ */
+export function computePositionFinancials(raw: SchwabPositionRaw): {
+  quantity:      number;
+  costBasis:     number;
+  unrealizedPnl: number;
+} {
+  const quantity = (raw.longQuantity ?? 0) - (raw.shortQuantity ?? 0);
+  const contractMultiplier = raw.instrument?.assetType === "OPTION" ? 100 : 1;
+  const costBasis     = quantity * (raw.averagePrice ?? 0) * contractMultiplier;
+  const unrealizedPnl = (raw.marketValue ?? 0) - costBasis;
+  return { quantity, costBasis, unrealizedPnl };
+}
+
 interface SchwabAccountRaw {
   securitiesAccount: {
     accountNumber: string;
@@ -171,10 +205,12 @@ export async function syncPositions(
     await run(db, `DELETE FROM schwab_positions WHERE account_number = ?`, [last4]);
 
     for (const raw of (sec.positions ?? [])) {
-      const symbol   = raw.instrument?.symbol ?? "UNKNOWN";
-      const qty      = (raw.longQuantity ?? 0) - (raw.shortQuantity ?? 0);
-      const costBasis = qty * (raw.averagePrice ?? 0);
-      const unrealizedPnl = (raw.marketValue ?? 0) - costBasis;
+      const symbol = raw.instrument?.symbol ?? "UNKNOWN";
+
+      // Fixed 2026-05-07: extracted to computePositionFinancials so the
+      // 100x contract multiplier on options cost-basis is in one place
+      // (was producing wrong-signed P&L on every option position).
+      const { quantity: qty, costBasis, unrealizedPnl } = computePositionFinancials(raw);
 
       const pos: SchwabPosition = {
         account_number:      last4,
