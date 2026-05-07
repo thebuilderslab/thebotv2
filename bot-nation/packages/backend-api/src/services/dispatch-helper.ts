@@ -39,7 +39,23 @@ export async function dispatchTextAsTask(
   env: Env,
   chatId: number | string,
   text: string,
-  options: { userId?: number | string; sendAck?: boolean; sourceLabel?: string; inboundMessageId?: number } = {},
+  options: {
+    userId?: number | string;
+    sendAck?: boolean;
+    sourceLabel?: string;
+    inboundMessageId?: number;
+    /**
+     * Phase B-1: caller-supplied specialist override. When set, bypasses the
+     * `classification.type === "action"` gate below and uses these values as
+     * the team/kind. Used by `nation-supervisor.handleMessage` to dispatch
+     * type='simple' / type='infrastructure' queries that the classifier
+     * still tagged with a specialist suggestedTeam (e.g., "what's today's
+     * p&l" classifies as 'simple' but suggestTeamFromAction returns
+     * 'team-finance'). Trivial-reply / too-short gates still apply.
+     */
+    forceTeam?: string;
+    forceTaskKind?: string;
+  } = {},
 ): Promise<DispatchResult> {
   const trimmed = text.trim();
 
@@ -49,15 +65,25 @@ export async function dispatchTextAsTask(
     return { ok: false, reason: "trivial_reply" };
   }
 
-  const classification = classifyQuery(trimmed);
-  if (classification.type !== "action") {
-    return { ok: false, reason: `not_action_(${classification.type})` };
+  let teamId: string;
+  let kind:   string;
+  if (options.forceTeam) {
+    // Phase B-1 override path: caller already decided the specialist. Skip
+    // the classifier-type gate. We still classify for audit-trail purposes
+    // (logged via the events table) but don't gate on type.
+    teamId = options.forceTeam;
+    kind   = options.forceTaskKind ?? "research";
+  } else {
+    const classification = classifyQuery(trimmed);
+    if (classification.type !== "action") {
+      return { ok: false, reason: `not_action_(${classification.type})` };
+    }
+    teamId = classification.suggestedTeam ?? "team-research";
+    kind   = classification.suggestedTaskKind ?? "research";
   }
 
   const taskId = crypto.randomUUID();
   const now = new Date().toISOString();
-  const teamId = classification.suggestedTeam ?? "team-research";
-  const kind = classification.suggestedTaskKind ?? "research";
   const agentId = AGENT_MAP[teamId] ?? "agent-research-lead";
 
   let taskDetails = "";

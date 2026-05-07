@@ -9,6 +9,8 @@
  */
 
 import { classifyQuery, type QueryType, type ClassifiedQuery } from './query-classifier';
+import { dispatchTextAsTask } from './dispatch-helper';
+import { run } from '../db/schema';
 import {
   listAllAgents,
   listAllTeams,
@@ -42,6 +44,24 @@ export interface NationSupervisorResponse {
   confidence: number;
   pendingAction?: string;
 }
+
+// ============================================================================
+// Phase B-1: Specialist dispatch allow-list
+// ============================================================================
+// Tightly scoped per the B-1 plan ("avoid over-dispatch"). When the
+// classifier flags a query with one of these specialist teams via
+// suggestedTeam (regardless of type='simple' / 'infrastructure' / 'action'),
+// handleMessage routes the query to that team's lead agent via
+// dispatchTextAsTask instead of doing an inline LLM reply.
+//
+// Excluded by design: team-research (the catch-all default — would
+// over-dispatch general-knowledge questions); team-build / team-infra
+// (chat operators don't typically self-trigger code changes; those go
+// through ACTION_PATTERNS). Add additional teams here only after their
+// specialist-dispatch path is verified end-to-end.
+const SPECIALIST_DISPATCH_ALLOWLIST = new Set<string>([
+  'team-finance',
+]);
 
 // ============================================================================
 // Main Handler
@@ -95,6 +115,82 @@ export async function handleMessage(
   // ── Classify the query ───────────────────────────────────────────────────
   const classification = classifyQuery(userText);
   console.log(`[NationSupervisor] Classified as: ${classification.type} (${(classification.confidence * 100).toFixed(0)}%)`);
+
+  // ── Phase B-1: specialist dispatch (R-DIR) ───────────────────────────────
+  // If the classifier flagged a specialist team that's in the allow-list AND
+  // the existing 'action' branch in routes/telegram.ts didn't already
+  // handle it (i.e. type !== 'action'), dispatch the query to the
+  // specialist agent via dispatchTextAsTask instead of dropping into an
+  // inline LLM reply with no tools. The PR A1+A2+A3 delivery path then
+  // delivers the real brief to chat as a follow-up message.
+  //
+  // type === 'action' is handled by routes/telegram.ts:205-348 BEFORE
+  // handleMessage is invoked, so dispatching here would double-task. We
+  // only dispatch for 'simple' and 'infrastructure' types.
+  if (
+    env?.DB &&
+    classification.suggestedTeam &&
+    SPECIALIST_DISPATCH_ALLOWLIST.has(classification.suggestedTeam) &&
+    classification.type !== 'action'
+  ) {
+    try {
+      const dispatch = await dispatchTextAsTask(env, chatId, userText, {
+        userId,
+        sendAck:       false,           // we send our own ack via the response below
+        sourceLabel:   'supervisor_dispatch',
+        forceTeam:     classification.suggestedTeam,
+        forceTaskKind: classification.suggestedTaskKind ?? 'research',
+      });
+
+      if (dispatch.ok && dispatch.taskId && dispatch.agentId) {
+        // Audit-trail event so the chat-driven dispatch path is observable
+        // alongside the existing telegram.replay / schwab.* events.
+        const now = new Date().toISOString();
+        await run(
+          env.DB,
+          `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+           VALUES (?, 'supervisor.dispatched', NULL, 'task', ?, ?, NULL, ?, ?)`,
+          [
+            crypto.randomUUID(),
+            dispatch.taskId,
+            JSON.stringify({
+              targetAgent:   dispatch.agentId,
+              taskKind:      classification.suggestedTaskKind ?? 'research',
+              suggestedTeam: classification.suggestedTeam,
+              classifiedAs:  classification.type,
+              originalQuery: userText.slice(0, 200),
+              chatId,
+            }),
+            now,
+            now,
+          ],
+        ).catch((err) => {
+          console.warn('[NationSupervisor] supervisor.dispatched event write failed:', err);
+        });
+
+        const ackMessage = `🤖 Dispatching to ${dispatch.agentId} — back in ~30s…\n<code>${dispatch.taskId}</code>`;
+        const ackResponse: NationSupervisorResponse = {
+          type:       'task_created',
+          message:    ackMessage,
+          queryType:  classification.type,
+          confidence: classification.confidence,
+          taskId:     dispatch.taskId,
+        };
+        if (db) {
+          return storeAndReturn(db, chatIdStr, userIdStr, ackResponse);
+        }
+        return ackResponse;
+      }
+
+      // dispatchTextAsTask refused (e.g., trivial_reply / too_short). Fall
+      // through to the existing handlers — don't fail the user-visible reply.
+      console.log(`[NationSupervisor] Specialist dispatch declined: ${dispatch.reason ?? 'unknown'}`);
+    } catch (err) {
+      // Never fail the chat reply just because dispatch errored. Fall
+      // through to the existing inline handlers.
+      console.error('[NationSupervisor] Specialist dispatch threw:', err);
+    }
+  }
 
   // ── Get conversation history for context ─────────────────────────────────
   let history: ChatMessage[] = [];

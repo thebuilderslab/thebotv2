@@ -240,10 +240,18 @@ export function classifyQuery(text: string): ClassifiedQuery {
   // Check for infrastructure queries
   const infrastructureScore = checkPatterns(lowerText, INFRASTRUCTURE_PATTERNS);
   if (infrastructureScore > 0.3) {
+    // Phase B-1: even infrastructure-shaped queries may carry specialist
+    // signal (e.g., "list my schwab accounts" matches infrastructure 'list X'
+    // patterns + finance team-detect patterns). Populate suggestedTeam so
+    // nation-supervisor.handleMessage can decide whether to dispatch.
+    const suggestedTeam     = suggestTeamFromAction(lowerText);
+    const suggestedTaskKind = suggestTaskKindFromAction(lowerText);
     return {
       type: 'infrastructure',
       confidence: infrastructureScore,
       reasoning: 'Query matches infrastructure patterns (agents, teams, capabilities, architecture)',
+      suggestedTeam,
+      suggestedTaskKind,
     };
   }
 
@@ -263,11 +271,21 @@ export function classifyQuery(text: string): ClassifiedQuery {
   }
 
   // Simple queries (default)
+  // Phase B-1: bare-conversational queries like "what's today's p&l" don't
+  // match FINANCE_PATTERNS (which require nearby trade context) and don't
+  // match ACTION_PATTERNS (no action verb), so they fall here. But they DO
+  // match suggestTeamFromAction's broader team-detect patterns. Populate
+  // suggestedTeam so nation-supervisor.handleMessage can route to a
+  // specialist instead of dropping into a tool-less LLM reply.
   const simpleScore = checkPatterns(lowerText, SIMPLE_QUERY_PATTERNS);
+  const simpleSuggestedTeam     = suggestTeamFromAction(lowerText);
+  const simpleSuggestedTaskKind = suggestTaskKindFromAction(lowerText);
   return {
     type: 'simple',
     confidence: simpleScore > 0.3 ? simpleScore : 0.65,
     reasoning: 'Query is general knowledge (not infrastructure, not action)',
+    suggestedTeam:     simpleSuggestedTeam,
+    suggestedTaskKind: simpleSuggestedTaskKind,
   };
 }
 
