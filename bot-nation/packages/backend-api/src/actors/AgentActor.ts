@@ -1000,7 +1000,7 @@ export class AgentActor implements DurableObject {
       /finance|trading|morning_trading|midday_trading|eod_wrap/i.test(task.kind);
 
     if (isFinanceTask) {
-      marketContext = await this.fetchMarketContext();
+      marketContext = await this.fetchMarketContext(task.id);
     }
 
     const userMessage = [
@@ -2026,7 +2026,14 @@ export class AgentActor implements DurableObject {
   // ── Live market data — Schwab primary, Yahoo Finance fallback ────────────────
   // Finance tasks get real quotes from Schwab (authenticated). Yahoo is the
   // fallback when Schwab isn't authorized or credentials aren't set.
-  private async fetchMarketContext(): Promise<string> {
+  //
+  // Phase A.5 Schwab remediation (Part 2): the inner try/catch around
+  // syncPositions used to swallow auth failures silently → R15a's force-sync
+  // intent was nullified, and operators saw stale Apr 24 positions for 9 days
+  // without any audit trail. Now we log + emit a `schwab.sync_failed` event +
+  // compute staleness vs the existing synced_at, then prepend a single STALE
+  // banner so the LLM sees it and echoes it into the brief.
+  private async fetchMarketContext(taskId: string): Promise<string> {
     const CORE_SYMBOLS = ["SPY", "QQQ", "GOOGL", "TSLA", "NVDA", "ORCL", "VIX"];
 
     // ── Try Schwab first ────────────────────────────────────────────────────
@@ -2037,15 +2044,43 @@ export class AgentActor implements DurableObject {
       try {
         // Force-sync positions from Schwab before reading — closes 4/27 stale-cache incident
         // where bot answered HOLD on a position that had already been closed in TOS.
+        let syncFailed: boolean = false;
+        let syncErrMsg: string | null = null;
         try {
           await syncPositions(this.env.DB, clientId, clientSecret);
-        } catch {
-          // Schwab API hiccup → fall through to whatever's cached
+        } catch (err) {
+          syncFailed = true;
+          syncErrMsg = err instanceof Error ? err.message : String(err);
+          console.error(`[AgentActor.fetchMarketContext] Schwab syncPositions failed for task ${taskId}: ${syncErrMsg}`);
+          await this.emitEvent(taskId, "schwab.sync_failed", {
+            error: syncErrMsg.slice(0, 500),
+          }, new Date().toISOString()).catch(() => { /* event log best-effort */ });
         }
         // Merge held symbols with core watchlist
-        const { positions } = await getStoredPositions(this.env.DB);
+        const { positions, synced_at } = await getStoredPositions(this.env.DB);
         const heldSymbols   = positions.map((p) => p.symbol).filter((s) => s !== "VIX");
         const allSymbols    = [...new Set([...CORE_SYMBOLS, ...heldSymbols])];
+
+        // ── Compute staleness banner ──────────────────────────────────────────
+        // Banner fires if EITHER the sync just failed OR cached data is >60min old.
+        // 60min threshold matches Schwab's normal cron cadence (4h+ gaps signal
+        // a problem); below 60min is normal cache reuse.
+        let staleBanner = "";
+        if (synced_at) {
+          const ageMs    = Date.now() - new Date(synced_at).getTime();
+          const ageHours = ageMs / 3_600_000;
+          if (syncFailed || ageMs > 60 * 60 * 1000) {
+            const ageLabel = ageHours < 1
+              ? `${Math.round(ageMs / 60_000)}m`
+              : `${ageHours.toFixed(1)}h`;
+            const reason = syncFailed
+              ? `sync failed: ${(syncErrMsg ?? "").slice(0, 120)}`
+              : `cached only`;
+            staleBanner = `🚨 STALE — last synced ${ageLabel} ago at ${synced_at} (${reason})\n`;
+          }
+        } else if (syncFailed) {
+          staleBanner = `🚨 STALE — no cached positions and sync failed: ${(syncErrMsg ?? "").slice(0, 120)}\n`;
+        }
 
         const quotes = await fetchQuotes(this.env.DB, clientId, clientSecret, allSymbols);
         if (quotes.length > 0) {
@@ -2054,9 +2089,18 @@ export class AgentActor implements DurableObject {
             const vol = q.volume > 0 ? ` | Vol: ${(q.volume / 1_000_000).toFixed(1)}M` : "";
             return `${q.symbol}: $${q.last_price.toFixed(2)} ${chg}${vol}`;
           });
-          return `[Schwab Live Quotes]\n${lines.join("\n")}`;
+          return `${staleBanner}[Schwab Live Quotes]\n${lines.join("\n")}`;
         }
-      } catch {
+
+        // No live quotes (fetchQuotes returned empty) — still surface the banner
+        // if relevant so the brief doesn't render silently with stale cache.
+        if (staleBanner) {
+          return `${staleBanner}[Schwab quotes empty — falling back to Yahoo]`;
+        }
+      } catch (err) {
+        // Outer catch — covers fetchQuotes failures or unexpected errors.
+        // Note: syncPositions errors are caught in the inner block above.
+        console.error(`[AgentActor.fetchMarketContext] Schwab path failed for task ${taskId}:`, err);
         // Fall through to Yahoo Finance
       }
     }

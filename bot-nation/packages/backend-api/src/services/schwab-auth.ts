@@ -156,6 +156,29 @@ export async function loadTokens(db: D1Database): Promise<SchwabTokens | null> {
   };
 }
 
+// ── Audit-trail event helper ──────────────────────────────────────────────────
+// Phase A.5 Schwab remediation (Part 2): the diagnosis surfaced that auth
+// failures left zero events — the silent catch in AgentActor masked them, but
+// even hard-fail paths weren't emitting refresh outcomes. This local helper
+// writes minimal `schwab.token_refreshed` / `schwab.token_refresh_failed` rows
+// targeting the agent that owns the credential (target_kind='agent',
+// target_id=TOKEN_AGENT_ID). No taskId is plumbed because getAccessToken is
+// called from many code paths (cron, route handlers, agent tasks); the agent
+// owner is the stable target.
+async function emitTokenEvent(
+  db: D1Database,
+  kind: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  const now = new Date().toISOString();
+  await run(
+    db,
+    `INSERT INTO events (id, kind, actor_id, target_kind, target_id, payload, session_id, created_at, updated_at)
+     VALUES (?, ?, NULL, 'agent', ?, ?, NULL, ?, ?)`,
+    [crypto.randomUUID(), kind, TOKEN_AGENT_ID, JSON.stringify(payload), now, now],
+  ).catch(() => { /* best-effort: never let audit write block the auth flow */ });
+}
+
 // ── Get a valid access token (auto-refreshes if expired) ─────────────────────
 
 export async function getAccessToken(
@@ -174,9 +197,22 @@ export async function getAccessToken(
     return stored.access_token;
   }
 
-  // Refresh
-  const fresh = await refreshAccessToken(stored.refresh_token, clientId, clientSecret);
+  // Refresh — emit success/failure events around the call so operators have
+  // an audit trail without needing to plumb taskId through every caller.
+  let fresh: SchwabTokens;
+  try {
+    fresh = await refreshAccessToken(stored.refresh_token, clientId, clientSecret);
+  } catch (err) {
+    await emitTokenEvent(db, "schwab.token_refresh_failed", {
+      error:           err instanceof Error ? err.message : String(err),
+      previousExpiry:  stored.expires_at,
+    });
+    throw err;
+  }
   await storeTokens(db, fresh);
+  await emitTokenEvent(db, "schwab.token_refreshed", {
+    newExpiry: fresh.expires_at,
+  });
   return fresh.access_token;
 }
 
