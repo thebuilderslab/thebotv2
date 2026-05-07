@@ -689,4 +689,37 @@ export async function persistTelegramMessage(
     // Never crash the main flow
     console.warn("[persistTelegramMessage] failed:", err);
   }
+
+  // ── MEM-1: bridge to chat-memory unified surface ───────────────────────────
+  // Phase B's first memory-layer fix. Every Telegram message persisted here
+  // also lands in chat_messages so agents (which read via getRecentHistory
+  // from chat-memory.ts) see the full conversation regardless of whether
+  // the message went through the supervisor's inline handler or the action
+  // dispatch path.
+  //
+  // Idempotency: storeMessage uses INSERT OR IGNORE; the partial UNIQUE
+  // index added by migration 0043 (chat_id, telegram_message_id) ensures
+  // that repeated calls with the same Telegram message ID create exactly
+  // one row. Calls without options.messageId (rare — currently only the
+  // dispatch-helper ack which doesn't yet have Telegram's response ID)
+  // bypass the constraint and insert normally.
+  //
+  // Best-effort: any chat-memory write failure is swallowed and never
+  // blocks the telegram_messages write above.
+  try {
+    const { storeMessage } = await import("./chat-memory");
+    await storeMessage(db, {
+      chat_id: String(chatId),
+      user_id: options.userId
+        ? String(options.userId)
+        : (direction === "out" ? "system" : "unknown"),
+      role:    direction === "in" ? "user" : "assistant",
+      content: text.slice(0, 4000),
+      task_id: options.taskId,
+      telegram_message_id: options.messageId,
+    });
+  } catch (err) {
+    // Best-effort: never let a chat-memory write failure block the main flow.
+    console.warn("[persistTelegramMessage→chat-memory] failed:", err);
+  }
 }

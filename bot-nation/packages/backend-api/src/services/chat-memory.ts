@@ -16,6 +16,15 @@ export interface ChatMessage {
   query_type?: string;
   task_id?: string;
   pending_action?: string;
+  /**
+   * MEM-1: Telegram message ID for the row's source message. Used as the
+   * idempotency key when persistTelegramMessage bridges into chat-memory
+   * (migration 0043 adds a partial UNIQUE index on (chat_id,
+   * telegram_message_id) so repeated calls with the same message ID
+   * insert at most one row). Rows from non-Telegram callers (or older
+   * supervisor.handleMessage calls) leave this NULL.
+   */
+  telegram_message_id?: number;
   created_at?: string;
 }
 
@@ -26,7 +35,13 @@ const MAX_HISTORY = 10; // Keep last 10 messages per chat
 // ============================================================================
 
 /**
- * Store a message in chat history
+ * Store a message in chat history.
+ *
+ * MEM-1: uses `INSERT OR IGNORE` so calls that supply `telegram_message_id`
+ * become idempotent (the partial UNIQUE index from migration 0043 catches
+ * duplicates with the same chat_id + telegram_message_id). Calls without
+ * a telegram_message_id (e.g., supervisor.handleMessage's existing direct
+ * writes) bypass the constraint and insert normally.
  */
 export async function storeMessage(
   db: D1Database,
@@ -34,8 +49,8 @@ export async function storeMessage(
 ): Promise<void> {
   await run(
     db,
-    `INSERT INTO chat_messages (chat_id, user_id, role, content, query_type, task_id, pending_action)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR IGNORE INTO chat_messages (chat_id, user_id, role, content, query_type, task_id, pending_action, telegram_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       message.chat_id,
       message.user_id,
@@ -44,6 +59,7 @@ export async function storeMessage(
       message.query_type || null,
       message.task_id || null,
       message.pending_action || null,
+      message.telegram_message_id ?? null,
     ],
   );
 
