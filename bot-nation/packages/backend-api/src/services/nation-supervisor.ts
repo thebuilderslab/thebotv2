@@ -706,8 +706,15 @@ export async function persistTelegramMessage(
   //
   // Best-effort: any chat-memory write failure is swallowed and never
   // blocks the telegram_messages write above.
+  //
+  // MEM-1.1: storeMessage is imported statically at the top of this file
+  // (alongside getRecentHistory, etc.). The original MEM-1 used a dynamic
+  // `await import("./chat-memory")` which added an extra await hop and
+  // caused fire-and-forget call sites near the request-return boundary
+  // (notably telegram.ts:393 for supervisor inline replies) to occasionally
+  // be cut off by Cloudflare Worker termination. Removing the dynamic
+  // import cuts one hop and improves bridge-row coverage for late callers.
   try {
-    const { storeMessage } = await import("./chat-memory");
     await storeMessage(db, {
       chat_id: String(chatId),
       user_id: options.userId
