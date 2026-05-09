@@ -148,12 +148,22 @@ export async function runWeeklyOptionsDirector(
     liveCount > 0 && fallbackCount > 0 ? "mixed" : liveCount > 0 ? "live" : "fallback";
 
   // ── 3. Build candidates per position ──────────────────────────────────────
+  // R-WEEKLY-DIRECTOR.1.2: enrich each PositionSnapshot's `delta` and
+  // `underlyingPrice` from the freshly-fetched chain rows + live quote
+  // BEFORE building candidates. Pre-1.2 these were null/0 because the
+  // schwab_positions table doesn't store option deltas — which made every
+  // candidate fail DELTA_RULE_FAILED in evaluateCandidate (delta math
+  // requires a non-null position.delta) and forced every position to HOLD.
+  // Now that we already fetch the chain per-position to build candidates,
+  // sourcing the position's own delta from the matching contract row is
+  // essentially free.
   const candidatesByPosition: Record<
     string,
     { nextWeek: RollCandidate[]; sameWeek: RollCandidate[] }
   > = {};
 
-  for (const pos of positions) {
+  for (let i = 0; i < positions.length; i++) {
+    const pos = positions[i]!;
     const underlying = deriveUnderlying(pos.symbol);
     let nextWeekRows: RawChainRow[] = [];
     let sameWeekRows: RawChainRow[] = [];
@@ -185,18 +195,30 @@ export async function runWeeklyOptionsDirector(
 
         sameWeekRows = rows.filter((r) => r.expirationDate === thisFridayIso);
         nextWeekRows = rows.filter((r) => r.expirationDate === nextFridayIso);
+
+        // R-WEEKLY-DIRECTOR.1.2: enrich position delta + underlying price
+        // from the fetched chain. Pass full `rows` so the position's
+        // contract (whose expiry could be neither this nor next Friday)
+        // can still be matched.
+        positions[i] = enrichPositionFromChain(
+          pos,
+          rows,
+          quotesByUnderlying[underlying] ?? null,
+        );
       } catch (err) {
         console.warn(`[weekly-options-director] options chain failed for ${underlying}:`, err);
       }
     }
 
-    candidatesByPosition[pos.positionId] = {
+    // Use the (possibly enriched) position when building candidates.
+    const enrichedPos = positions[i]!;
+    candidatesByPosition[enrichedPos.positionId] = {
       nextWeek: buildNextWeekCandidates(
-        { position: pos, chainRowsThisWeek: sameWeekRows, chainRowsNextWeek: nextWeekRows },
+        { position: enrichedPos, chainRowsThisWeek: sameWeekRows, chainRowsNextWeek: nextWeekRows },
         policy,
       ),
       sameWeek: buildSameWeekCandidates(
-        { position: pos, chainRowsThisWeek: sameWeekRows, chainRowsNextWeek: nextWeekRows },
+        { position: enrichedPos, chainRowsThisWeek: sameWeekRows, chainRowsNextWeek: nextWeekRows },
         policy,
       ),
     };
@@ -302,6 +324,50 @@ export async function runWeeklyOptionsDirector(
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * R-WEEKLY-DIRECTOR.1.2: enrich a PositionSnapshot's `delta` and
+ * `underlyingPrice` from a freshly-fetched option chain + live underlying
+ * quote. Pure function — exported for fixture testability.
+ *
+ * Pre-1.2 behavior: storedRowToSnapshot left these as null/0 because the
+ * `schwab_positions` D1 table doesn't store option Greeks. evaluateCandidate
+ * then rejected every roll candidate with DELTA_RULE_FAILED (delta math
+ * requires non-null position.delta). Result: every position evaluated to
+ * HOLD/REGIME_HOLD regardless of actual chain conditions — honest output,
+ * but uninformative.
+ *
+ * Post-1.2 behavior: orchestrator already fetches the per-position chain
+ * to build candidates. We match the position's specific contract by
+ * (optionType, strike, expirationDate) and pull its live `delta`. Same
+ * pass injects the live underlying price from the quote fetch (used by
+ * candidates.ts to sort strikes by distance from the underlying).
+ *
+ * Returns a NEW PositionSnapshot rather than mutating in place. Defensive:
+ * if no matching chain row exists or its delta is null, the original
+ * position.delta is preserved (typically null). Same for underlyingPrice.
+ */
+export function enrichPositionFromChain(
+  position: PositionSnapshot,
+  chainRows: { contractType: "CALL" | "PUT"; strike: number; expirationDate: string; delta: number | null }[],
+  underlyingPrice: number | null,
+): PositionSnapshot {
+  const match = chainRows.find(
+    (r) =>
+      r.contractType === position.optionType &&
+      r.strike === position.strike &&
+      r.expirationDate === position.expirationDate,
+  );
+  return {
+    ...position,
+    delta: match?.delta ?? position.delta,
+    underlyingPrice:
+      underlyingPrice != null && Number.isFinite(underlyingPrice) && underlyingPrice > 0
+        ? underlyingPrice
+        : position.underlyingPrice,
+  };
+}
+
 
 async function emit(
   env: Env,

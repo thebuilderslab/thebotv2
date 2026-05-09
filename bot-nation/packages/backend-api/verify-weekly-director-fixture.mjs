@@ -31,6 +31,8 @@ const {
   classifyVolatilityRegime,
 } = await import("./verify-out/services/trading-policy/index.js");
 
+const { enrichPositionFromChain } = await import("./verify-out/services/trading/weekly-options-director.js");
+
 let failures = 0;
 const fail = (label, detail) => {
   failures++;
@@ -292,6 +294,75 @@ for (const fx of fixtures) {
     pass("F-CAND: net-debit candidate rejected with NET_DEBIT_REJECTED");
   } else {
     fail("F-CAND: net-debit candidate eligibility wrong", `eligible=${ev.eligible} reasons=[${ev.rejectionReasons.join(",")}]`);
+  }
+}
+
+// ── F-ENRICH: enrichPositionFromChain (R-WEEKLY-DIRECTOR.1.2) ───────────────
+// Pre-1.2: position.delta=null and position.underlyingPrice=0 from the
+// orchestrator (schwab_positions table doesn't store deltas/quotes).
+// Post-1.2: orchestrator pulls both from the per-position chain fetch.
+{
+  const basePosition = {
+    accountId: "5105",
+    symbol: "GOOGL",
+    positionId: "pos-test-1",
+    optionType: "CALL",
+    side: "LONG",
+    quantity: 1,
+    strike: 430,
+    expirationDate: "2026-06-18",
+    mark: 5.55,
+    delta: null,           // pre-enrichment state
+    pnlPct: 1.91,
+    daysToExpiry: 40,
+    underlyingPrice: 0,    // pre-enrichment state
+    strategyTag: null,
+  };
+  const chainRows = [
+    { contractType: "CALL", strike: 425, expirationDate: "2026-06-18", delta: 0.58 },
+    { contractType: "CALL", strike: 430, expirationDate: "2026-06-18", delta: 0.52 }, // matches position
+    { contractType: "CALL", strike: 435, expirationDate: "2026-06-18", delta: 0.46 },
+    { contractType: "PUT",  strike: 430, expirationDate: "2026-06-18", delta: -0.48 }, // wrong contractType
+    { contractType: "CALL", strike: 430, expirationDate: "2026-05-22", delta: 0.20 }, // wrong expiry
+  ];
+  const enriched = enrichPositionFromChain(basePosition, chainRows, 396.63);
+
+  if (enriched.delta === 0.52 && enriched.underlyingPrice === 396.63) {
+    pass(`F-ENRICH: matching CALL @ 430 / 2026-06-18 → delta=0.52, underlyingPrice=$396.63`);
+  } else {
+    fail(`F-ENRICH: enrichment wrong`, `delta=${enriched.delta} underlyingPrice=${enriched.underlyingPrice}`);
+  }
+
+  // Defensive: position.delta + underlyingPrice unchanged when no match
+  const noMatch = enrichPositionFromChain(
+    { ...basePosition, strike: 999 },                  // strike won't match any row
+    chainRows,
+    null,                                              // no live quote
+  );
+  if (noMatch.delta === null && noMatch.underlyingPrice === 0) {
+    pass(`F-ENRICH: no matching row + no underlying quote → original (null/0) preserved`);
+  } else {
+    fail(`F-ENRICH: defensive defaults wrong`, `delta=${noMatch.delta} underlyingPrice=${noMatch.underlyingPrice}`);
+  }
+
+  // Defensive: matching row with null delta doesn't overwrite valid existing value
+  const incomingNull = enrichPositionFromChain(
+    { ...basePosition, delta: 0.52 },                  // already has a delta
+    [{ contractType: "CALL", strike: 430, expirationDate: "2026-06-18", delta: null }],
+    396.63,
+  );
+  if (incomingNull.delta === 0.52) {
+    pass(`F-ENRICH: matching row with null delta does NOT overwrite existing position.delta`);
+  } else {
+    fail(`F-ENRICH: null overwrite wrong`, `delta=${incomingNull.delta}`);
+  }
+
+  // Defensive: zero/negative underlying price doesn't get used (Number.isFinite + > 0 guard)
+  const zeroQuote = enrichPositionFromChain(basePosition, chainRows, 0);
+  if (zeroQuote.underlyingPrice === 0) {
+    pass(`F-ENRICH: underlyingPrice=0 from quote ignored (sentinel value, not real)`);
+  } else {
+    fail(`F-ENRICH: zero quote should be ignored`, `underlyingPrice=${zeroQuote.underlyingPrice}`);
   }
 }
 
