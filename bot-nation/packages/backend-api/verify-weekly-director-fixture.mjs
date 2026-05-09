@@ -31,7 +31,7 @@ const {
   classifyVolatilityRegime,
 } = await import("./verify-out/services/trading-policy/index.js");
 
-const { enrichPositionFromChain } = await import("./verify-out/services/trading/weekly-options-director.js");
+const { enrichPositionFromChain, positionExpiryWindows } = await import("./verify-out/services/trading/weekly-options-director.js");
 
 let failures = 0;
 const fail = (label, detail) => {
@@ -363,6 +363,96 @@ for (const fx of fixtures) {
     pass(`F-ENRICH: underlyingPrice=0 from quote ignored (sentinel value, not real)`);
   } else {
     fail(`F-ENRICH: zero quote should be ignored`, `underlyingPrice=${zeroQuote.underlyingPrice}`);
+  }
+}
+
+// ── F-WIN-1..4: positionExpiryWindows (R-WEEKLY-DIRECTOR.1.3) ───────────────
+// Pre-1.3: windows were today-relative (upcomingFriday/nextFriday). Live dry
+// run #3 selected GOOGL 410C 2026-05-15 for a position expiring 2026-06-18 —
+// 5 weeks BACKWARD. Post-1.3: windows are anchored on each position's own
+// expiry date.
+
+// F-WIN-1: position expires Thursday Jun 18 2026 → Friday-of-week is Jun 19,
+//          forward weeks +7/+14/+21 = Jun 26 / Jul 3 / Jul 10
+{
+  const win = positionExpiryWindows("2026-06-18"); // Thursday
+  if (
+    win.positionWeekFriday === "2026-06-19" &&
+    win.sameWeekDates.length === 2 &&
+    win.sameWeekDates.includes("2026-06-18") &&
+    win.sameWeekDates.includes("2026-06-19") &&
+    win.nextWeek1 === "2026-06-26" &&
+    win.nextWeek2 === "2026-07-03" &&
+    win.nextWeek3 === "2026-07-10" &&
+    win.fromDate === "2026-06-18" &&
+    win.toDate === "2026-07-10"
+  ) {
+    pass(`F-WIN-1: Thursday Jun 18 → friday=Jun 19, sameWeek=[Jun 18, Jun 19], next=[Jun 26, Jul 3, Jul 10]`);
+  } else {
+    fail(`F-WIN-1: Thursday-expiry windows wrong`, JSON.stringify(win));
+  }
+}
+
+// F-WIN-2: position expires Friday Jun 19 2026 → sameWeekDates dedupes to
+//          single date, forward weeks identical to F-WIN-1
+{
+  const win = positionExpiryWindows("2026-06-19"); // Friday
+  if (
+    win.positionWeekFriday === "2026-06-19" &&
+    win.sameWeekDates.length === 1 &&
+    win.sameWeekDates[0] === "2026-06-19" &&
+    win.nextWeek1 === "2026-06-26"
+  ) {
+    pass(`F-WIN-2: Friday Jun 19 → sameWeekDates deduped to [Jun 19]`);
+  } else {
+    fail(`F-WIN-2: Friday-expiry windows wrong`, JSON.stringify(win));
+  }
+}
+
+// F-WIN-3: today-relative wrong-week sentinel — chain row for 2026-05-15
+//          (the wrong-week date that bit dry run #3) MUST NOT match either
+//          window for a position expiring 2026-06-18.
+{
+  const win = positionExpiryWindows("2026-06-18");
+  const wrongWeekRow = { contractType: "CALL", strike: 410, expirationDate: "2026-05-15", delta: 0.20 };
+  const inSameWeek = win.sameWeekDates.includes(wrongWeekRow.expirationDate);
+  const inNextWeek =
+    wrongWeekRow.expirationDate === win.nextWeek1 ||
+    wrongWeekRow.expirationDate === win.nextWeek2 ||
+    wrongWeekRow.expirationDate === win.nextWeek3;
+  if (!inSameWeek && !inNextWeek) {
+    pass(`F-WIN-3: today-relative wrong-week chain (May 15) NOT selected for Jun 18 position — backward bug fixed`);
+  } else {
+    fail(`F-WIN-3: wrong-week row leaked`, `inSameWeek=${inSameWeek} inNextWeek=${inNextWeek}`);
+  }
+}
+
+// F-WIN-4: position expires Jun 18; chain has rows for Jun 18, Jun 19, Jun 26
+//          → sameWeekRows captures Jun 18 + Jun 19, nextWeekRows captures Jun 26.
+//          Verifies the orchestrator's filter logic against the helper output.
+{
+  const win = positionExpiryWindows("2026-06-18");
+  const rows = [
+    { contractType: "CALL", strike: 430, expirationDate: "2026-06-18", delta: 0.27 }, // position's own expiry (Thu)
+    { contractType: "CALL", strike: 430, expirationDate: "2026-06-19", delta: 0.28 }, // same-week Friday
+    { contractType: "CALL", strike: 430, expirationDate: "2026-06-26", delta: 0.29 }, // next-week Friday
+    { contractType: "CALL", strike: 430, expirationDate: "2026-05-15", delta: 0.18 }, // wrong-week sentinel (must not appear)
+  ];
+  const sameWeek = rows.filter((r) => win.sameWeekDates.includes(r.expirationDate));
+  const nextWeek = rows.filter(
+    (r) => r.expirationDate === win.nextWeek1
+        || r.expirationDate === win.nextWeek2
+        || r.expirationDate === win.nextWeek3,
+  );
+  const sameOk = sameWeek.length === 2 &&
+    sameWeek.some((r) => r.expirationDate === "2026-06-18") &&
+    sameWeek.some((r) => r.expirationDate === "2026-06-19");
+  const nextOk = nextWeek.length === 1 && nextWeek[0].expirationDate === "2026-06-26";
+  const wrongLeaked = sameWeek.concat(nextWeek).some((r) => r.expirationDate === "2026-05-15");
+  if (sameOk && nextOk && !wrongLeaked) {
+    pass(`F-WIN-4: filter on real chain → sameWeek=[Jun 18, Jun 19], nextWeek=[Jun 26], wrong-week May 15 excluded`);
+  } else {
+    fail(`F-WIN-4: chain filter wrong`, `sameOk=${sameOk} nextOk=${nextOk} wrongLeaked=${wrongLeaked} sameWeek=${JSON.stringify(sameWeek)} nextWeek=${JSON.stringify(nextWeek)}`);
   }
 }
 

@@ -170,9 +170,17 @@ export async function runWeeklyOptionsDirector(
 
     if (clientId && clientSecret) {
       try {
+        // R-WEEKLY-DIRECTOR.1.3: anchor the chain fetch + window
+        // partitioning on the POSITION'S OWN expiry, not on today's
+        // calendar. fromDate/toDate constrain Schwab's response so we
+        // get rows for the position-week + 3 forward weeks (no wasted
+        // bandwidth on irrelevant near-term expirations).
+        const win = positionExpiryWindows(pos.expirationDate);
         const chain = await fetchOptionsChain(env.DB, clientId, clientSecret, underlying, {
           contractType: pos.optionType,
           strikeCount: 12,
+          fromDate: win.fromDate,
+          toDate:   win.toDate,
         });
         const rows: RawChainRow[] = (
           pos.optionType === "CALL" ? chain.calls : chain.puts
@@ -190,16 +198,23 @@ export async function runWeeklyOptionsDirector(
           dte: c.dte,
         }));
 
-        const thisFridayIso = upcomingFriday();
-        const nextFridayIso = nextFriday();
+        // Same-week candidates (used by buildSameWeekCandidates for
+        // backward-repair candidates in current .1 logic; .2 will gate
+        // these with BACKWARD_ROLL_REJECTED unless repair conditions
+        // hold). Covers both the position's own expiry date AND the
+        // Friday of that week (Thursday-monthlies + Friday-weeklies).
+        sameWeekRows = rows.filter((r) => win.sameWeekDates.includes(r.expirationDate));
 
-        sameWeekRows = rows.filter((r) => r.expirationDate === thisFridayIso);
-        nextWeekRows = rows.filter((r) => r.expirationDate === nextFridayIso);
+        // Forward candidates: next Friday after position-week + 2 + 3.
+        nextWeekRows = rows.filter(
+          (r) => r.expirationDate === win.nextWeek1
+              || r.expirationDate === win.nextWeek2
+              || r.expirationDate === win.nextWeek3,
+        );
 
         // R-WEEKLY-DIRECTOR.1.2: enrich position delta + underlying price
         // from the fetched chain. Pass full `rows` so the position's
-        // contract (whose expiry could be neither this nor next Friday)
-        // can still be matched.
+        // contract is matched by (optionType, strike, expirationDate).
         positions[i] = enrichPositionFromChain(
           pos,
           rows,
@@ -472,25 +487,57 @@ function daysBetween(a: Date, b: Date): number {
   return Math.floor((b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
 }
 
-function upcomingFriday(): string {
-  const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun..6=Sat; Friday=5
-  const delta = (5 - day + 7) % 7;
-  const d = new Date(now);
-  d.setUTCDate(d.getUTCDate() + delta);
-  return isoDateOnly(d);
+// R-WEEKLY-DIRECTOR.1.3: position-expiry-relative window math.
+//
+// Pre-1.3 the orchestrator computed `thisFriday` / `nextFriday` from TODAY's
+// calendar, which produced wrong-week chain rows for any position that
+// doesn't expire in the current calendar week. Live dry run #3 (cycle
+// `7460f2aa`) selected `GOOGL 410C 2026-05-15` for a position expiring
+// `2026-06-18` — 5 weeks BEFORE the position's own expiry. All 24
+// rejected candidates also had expirationDate `2026-05-15`.
+//
+// Post-1.3: same/next-week windows are anchored on each position's own
+// expiration date. Forward candidate weeks = position-week-Friday +7,
+// +14, +21 days. Same-week (used for backward-repair only) covers both
+// the position's own expiry date AND the Friday of that week (handles
+// Thursday-monthlies + Friday-weeklies).
+//
+// PURE FUNCTION. Exported for fixture testability. No DB / HTTP / Schwab
+// inside.
+
+export interface PositionExpiryWindows {
+  positionExpiry:     string;     // e.g. "2026-06-18"
+  positionWeekFriday: string;     // Friday of that week (e.g. "2026-06-19")
+  sameWeekDates:      string[];   // [positionExpiry, positionWeekFriday], deduped
+  nextWeek1:          string;     // positionWeekFriday + 7
+  nextWeek2:          string;     // + 14
+  nextWeek3:          string;     // + 21
+  fromDate:           string;     // for fetchOptionsChain — == positionExpiry
+  toDate:             string;     // for fetchOptionsChain — == nextWeek3
 }
 
-function nextFriday(): string {
-  const now = new Date();
-  const day = now.getUTCDay();
-  const delta = ((5 - day + 7) % 7) + 7;
-  const d = new Date(now);
-  d.setUTCDate(d.getUTCDate() + delta);
-  return isoDateOnly(d);
+export function positionExpiryWindows(positionExpirationDate: string): PositionExpiryWindows {
+  const base = new Date(positionExpirationDate + "T00:00:00Z");
+  const day = base.getUTCDay();              // 0=Sun..6=Sat, Friday=5
+  const offsetToFriday = ((5 - day) + 7) % 7; // 0 if already Friday
+  const positionWeekFriday = addDaysIso(positionExpirationDate, offsetToFriday);
+  const sameWeekDates = [positionExpirationDate, positionWeekFriday]
+    .filter((d, i, arr) => arr.indexOf(d) === i); // dedup if Friday-expiry
+  return {
+    positionExpiry:    positionExpirationDate,
+    positionWeekFriday,
+    sameWeekDates,
+    nextWeek1: addDaysIso(positionWeekFriday, 7),
+    nextWeek2: addDaysIso(positionWeekFriday, 14),
+    nextWeek3: addDaysIso(positionWeekFriday, 21),
+    fromDate:  positionExpirationDate,
+    toDate:    addDaysIso(positionWeekFriday, 21),
+  };
 }
 
-function isoDateOnly(d: Date): string {
+function addDaysIso(iso: string, days: number): string {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
