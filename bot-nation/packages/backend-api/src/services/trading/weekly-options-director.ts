@@ -351,9 +351,17 @@ function storedRowToSnapshot(
   const daysToExpiry = expirationDate ? Math.max(0, daysBetween(new Date(), new Date(expirationDate))) : 0;
   const pnlPct = row.cost_basis !== 0 ? row.unrealized_pnl / Math.abs(row.cost_basis) : 0;
 
+  // R-WEEKLY-DIRECTOR.1.1 fix: PositionSnapshot.symbol per spec is the
+  // UNDERLYING TICKER (e.g. "GOOGL"), NOT the OCC contract symbol. The
+  // first dry-run on 2026-05-09 produced PRECHECK_FAILED for every
+  // position because evaluateAccount looks up
+  // marketByUnderlying[position.symbol] expecting the underlying, but
+  // we were storing the OCC string here. The contract is identified by
+  // (symbol, optionType, strike, expirationDate) — no separate OCC
+  // field needed for .1's dry-run flow.
   return {
     accountId,
-    symbol:        row.symbol.trim(),
+    symbol:        deriveUnderlying(row.symbol),
     positionId:    `pos-${accountId}-${row.symbol.replace(/\s+/g, "-")}`,
     optionType,
     side:          row.quantity >= 0 ? "LONG" : "SHORT",
