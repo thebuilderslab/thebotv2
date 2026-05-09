@@ -1,0 +1,86 @@
+{
+  "_description": "R-WEEKLY-DIRECTOR.1 fixture: CHOP regime, candidates exist but neither improves risk enough (next-week profit +0.20 fails 0.40 threshold; same-week abs delta change 0.05 fails 0.03 cap). Expect HOLD with both NO_VALID_*_ROLL reasons surfaced.",
+  "policyVersion": "weekly-options-v1",
+  "position": {
+    "accountId": "ACCT-749",
+    "symbol": "SPY",
+    "positionId": "pos-spy-590c-may15",
+    "optionType": "CALL",
+    "side": "LONG",
+    "quantity": 1,
+    "strike": 590,
+    "expirationDate": "2026-05-15",
+    "mark": 1.20,
+    "delta": 0.30,
+    "pnlPct": 0.05,
+    "daysToExpiry": 7,
+    "underlyingPrice": 588.0,
+    "strategyTag": "neutral-call"
+  },
+  "market": {
+    "symbol": "SPY",
+    "asOfIso": "2026-05-08T13:30:00Z",
+    "trendRegime": "CHOP",
+    "volatilityRegime": "VOL_NORMAL",
+    "todayOpen": 587.5,
+    "atr14": 2.5,
+    "atr20Avg": 2.6,
+    "targetHigh": 595,
+    "targetLow": 580,
+    "priorHigh": 589.0,
+    "priorLow": 586.5,
+    "priorClose": 588.0,
+    "hasEarningsTodayOrTomorrow": false,
+    "hasMajorMacroEvent": false
+  },
+  "nextWeekCandidates": [
+    {
+      "symbol": "SPY_260522C00595000",
+      "fromPositionId": "pos-spy-590c-may15",
+      "candidateType": "NEXT_WEEK",
+      "newExpirationDate": "2026-05-22",
+      "newStrike": 595,
+      "newMark": 0.96,
+      "estimatedNetCredit": 0.24,
+      "estimatedProfitImprovementPct": 0.20,
+      "newDelta": 0.20,
+      "deltaAbsChange": -0.10,
+      "deltaReductionPctFromCurrent": 0.333,
+      "bid": 0.94,
+      "ask": 0.98,
+      "spread": 0.04,
+      "isNetDebit": false,
+      "isLiquidityAcceptable": true,
+      "preservesSimilarMarginFootprint": true,
+      "preservesMarkRange": true
+    }
+  ],
+  "sameWeekCandidates": [
+    {
+      "symbol": "SPY_260515C00592500",
+      "fromPositionId": "pos-spy-590c-may15",
+      "candidateType": "SAME_WEEK",
+      "newExpirationDate": "2026-05-15",
+      "newStrike": 592.5,
+      "newMark": 1.00,
+      "estimatedNetCredit": 0.20,
+      "estimatedProfitImprovementPct": 0.17,
+      "newDelta": 0.25,
+      "deltaAbsChange": -0.05,
+      "deltaReductionPctFromCurrent": 0.167,
+      "bid": 0.98,
+      "ask": 1.02,
+      "spread": 0.04,
+      "isNetDebit": false,
+      "isLiquidityAcceptable": true,
+      "preservesSimilarMarginFootprint": true,
+      "preservesMarkRange": true
+    }
+  ],
+  "expected": {
+    "selectedAction": "HOLD",
+    "primaryReason": "REGIME_HOLD",
+    "reasonsInclude": ["NO_VALID_NEXT_WEEK_ROLL", "NO_VALID_SAME_WEEK_ROLL"],
+    "rejectionReasonCodesPresent": ["PROFIT_RULE_FAILED", "DELTA_RULE_FAILED"]
+  }
+}

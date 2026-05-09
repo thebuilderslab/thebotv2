@@ -1,0 +1,87 @@
+{
+  "_description": "R-WEEKLY-DIRECTOR.1 fixture: bullish profitable position with valid next-week roll candidate (+43% profit improvement, 0.45 delta reduction). Expect ROLL_NEXT_WEEK with the next-week candidate chosen over a weaker same-week alternative.",
+  "policyVersion": "weekly-options-v1",
+  "position": {
+    "accountId": "ACCT-105",
+    "symbol": "GOOGL",
+    "positionId": "pos-googl-430c-jun18",
+    "optionType": "CALL",
+    "side": "LONG",
+    "quantity": 1,
+    "strike": 430,
+    "expirationDate": "2026-05-15",
+    "mark": 6.15,
+    "delta": 0.52,
+    "pnlPct": 2.22,
+    "daysToExpiry": 7,
+    "underlyingPrice": 396.63,
+    "strategyTag": "long-call-winner"
+  },
+  "market": {
+    "symbol": "GOOGL",
+    "asOfIso": "2026-05-08T13:30:00Z",
+    "trendRegime": "BULL_STRONG",
+    "volatilityRegime": "VOL_NORMAL",
+    "todayOpen": 395.0,
+    "atr14": 4.1,
+    "atr20Avg": 4.0,
+    "targetHigh": 410,
+    "targetLow": 380,
+    "priorHigh": 397.2,
+    "priorLow": 393.5,
+    "priorClose": 396.0,
+    "hasEarningsTodayOrTomorrow": false,
+    "hasMajorMacroEvent": false
+  },
+  "nextWeekCandidates": [
+    {
+      "symbol": "GOOGL_260522C00440000",
+      "fromPositionId": "pos-googl-430c-jun18",
+      "candidateType": "NEXT_WEEK",
+      "newExpirationDate": "2026-05-22",
+      "newStrike": 440,
+      "newMark": 3.50,
+      "estimatedNetCredit": 2.65,
+      "estimatedProfitImprovementPct": 0.43,
+      "newDelta": 0.07,
+      "deltaAbsChange": -0.45,
+      "deltaReductionPctFromCurrent": 0.865,
+      "bid": 3.45,
+      "ask": 3.55,
+      "spread": 0.10,
+      "isNetDebit": false,
+      "isLiquidityAcceptable": true,
+      "preservesSimilarMarginFootprint": true,
+      "preservesMarkRange": true
+    }
+  ],
+  "sameWeekCandidates": [
+    {
+      "symbol": "GOOGL_260515C00435000",
+      "fromPositionId": "pos-googl-430c-jun18",
+      "candidateType": "SAME_WEEK",
+      "newExpirationDate": "2026-05-15",
+      "newStrike": 435,
+      "newMark": 5.20,
+      "estimatedNetCredit": 0.95,
+      "estimatedProfitImprovementPct": 0.15,
+      "newDelta": 0.50,
+      "deltaAbsChange": -0.02,
+      "deltaReductionPctFromCurrent": 0.038,
+      "bid": 5.15,
+      "ask": 5.25,
+      "spread": 0.10,
+      "isNetDebit": false,
+      "isLiquidityAcceptable": true,
+      "preservesSimilarMarginFootprint": true,
+      "preservesMarkRange": true
+    }
+  ],
+  "expected": {
+    "selectedAction": "ROLL_NEXT_WEEK",
+    "primaryReason": "NEXT_WEEK_ROLL_SELECTED",
+    "reasonsInclude": ["NEXT_WEEK_ROLL_SELECTED"],
+    "chosenCandidateNewStrike": 440,
+    "chosenCandidateExpiration": "2026-05-22"
+  }
+}

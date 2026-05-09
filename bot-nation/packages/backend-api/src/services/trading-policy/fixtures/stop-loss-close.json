@@ -1,0 +1,43 @@
+{
+  "_description": "R-WEEKLY-DIRECTOR.1 fixture: hard stop-loss override. Position pnlPct -0.41 is below policy.risk.stopLossPnlPct -0.40 → CLOSE regardless of regime or candidate quality.",
+  "policyVersion": "weekly-options-v1",
+  "position": {
+    "accountId": "ACCT-749",
+    "symbol": "TSLA",
+    "positionId": "pos-tsla-480c-may15",
+    "optionType": "CALL",
+    "side": "LONG",
+    "quantity": 1,
+    "strike": 480,
+    "expirationDate": "2026-05-15",
+    "mark": 0.27,
+    "delta": 0.18,
+    "pnlPct": -0.41,
+    "daysToExpiry": 7,
+    "underlyingPrice": 402.7,
+    "strategyTag": "long-call-lottery"
+  },
+  "market": {
+    "symbol": "TSLA",
+    "asOfIso": "2026-05-08T13:30:00Z",
+    "trendRegime": "BULL_STRONG",
+    "volatilityRegime": "VOL_NORMAL",
+    "todayOpen": 401.5,
+    "atr14": 8.2,
+    "atr20Avg": 7.9,
+    "targetHigh": 425,
+    "targetLow": 395,
+    "priorHigh": 405.1,
+    "priorLow": 398.4,
+    "priorClose": 402.4,
+    "hasEarningsTodayOrTomorrow": false,
+    "hasMajorMacroEvent": false
+  },
+  "nextWeekCandidates": [],
+  "sameWeekCandidates": [],
+  "expected": {
+    "selectedAction": "CLOSE",
+    "primaryReason": "POSITION_STOP_LOSS",
+    "reasonsInclude": ["POSITION_STOP_LOSS"]
+  }
+}

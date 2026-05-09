@@ -52,7 +52,9 @@
       // Weekly mission & directives review — Sunday 10pm ET (Monday 02:00 UTC)
       "0 2 * * 1",
       // Position exit monitor — 3:00pm ET weekdays (19:00 UTC), 60 min before close
-      "0 19 * * 1-5"
+      "0 19 * * 1-5",
+      // R-WEEKLY-DIRECTOR.1 — Wednesday 9:30am ET (13:30 UTC) dry-run only
+      "30 13 * * 3"
     ]
   },
   "ai": {

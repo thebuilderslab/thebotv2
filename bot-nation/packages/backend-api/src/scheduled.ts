@@ -551,6 +551,31 @@ async function runScheduledTick(
     return;
   }
 
+  // ── R-WEEKLY-DIRECTOR.1 — Wednesday 9:30am ET (13:30 UTC) ─────────────────
+  // Dry-run only. The orchestrator hard-guards mode="dry_run" regardless
+  // of the requested mode passed here. Default account is the first
+  // Schwab-linked account (R-WEEKLY-DIRECTOR.3 will iterate all accounts).
+  if (controller.cron === "30 13 * * 3") {
+    ctx.waitUntil((async () => {
+      try {
+        const { runWeeklyOptionsDirector } = await import("./services/trading/weekly-options-director");
+        const accountRow = await queryOne<{ account_number: string }>(
+          env.DB,
+          "SELECT account_number FROM schwab_account_summary ORDER BY account_number LIMIT 1",
+          [],
+        );
+        if (!accountRow) {
+          console.warn("[scheduler/weekly-director] no Schwab accounts found — skipping cycle");
+          return;
+        }
+        await runWeeklyOptionsDirector(env, accountRow.account_number, "dry_run");
+      } catch (err) {
+        console.error("[scheduler/weekly-director] cycle failed:", err);
+      }
+    })());
+    return;
+  }
+
   // ── Mission cron: insert a scheduled task, let the */5 dispatcher execute it ─
   const mission = MISSION_CRONS[controller.cron];
   if (mission) {

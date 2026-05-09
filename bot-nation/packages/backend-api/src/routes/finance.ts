@@ -31,8 +31,43 @@ import {
   stagePendingOrder,
   formatOrderForTelegram,
 } from "../services/schwab-orders";
+import { runWeeklyOptionsDirector } from "../services/trading/weekly-options-director";
 
 export const financeRouter = new Hono<{ Bindings: Env }>();
+
+// ── POST /api/finance/director/run ────────────────────────────────────────────
+// R-WEEKLY-DIRECTOR.1: operator-triggered manual dry-run of the weekly
+// options director. Auth via x-deploy-secret (matches the build.ts /
+// admin.ts pattern). Mode is hard-coded to "dry_run" inside the
+// orchestrator regardless of caller input — .1 invariant.
+//
+// Body: { accountId: string }  (or query ?accountId=...)
+// Auth: header `x-deploy-secret: <env.DEPLOY_WEBHOOK_SECRET>`
+
+financeRouter.post("/api/finance/director/run", async (c) => {
+  const expected = (c.env as unknown as Record<string, string>)["DEPLOY_WEBHOOK_SECRET"];
+  if (!expected) {
+    return c.json({ error: "DEPLOY_WEBHOOK_SECRET not configured" }, 500);
+  }
+  const supplied = c.req.header("x-deploy-secret");
+  if (!supplied || supplied !== expected) {
+    return c.json({ error: "unauthorized" }, 401);
+  }
+
+  let accountId = c.req.query("accountId");
+  if (!accountId) {
+    try {
+      const body = await c.req.json<{ accountId?: string }>();
+      accountId = body?.accountId;
+    } catch { /* ignore */ }
+  }
+  if (!accountId) {
+    return c.json({ error: "accountId required (query ?accountId= or JSON body)" }, 400);
+  }
+
+  const result = await runWeeklyOptionsDirector(c.env, accountId, "dry_run");
+  return c.json(result);
+});
 
 // ── GET /api/finance/targets ──────────────────────────────────────────────────
 // Returns the most recent price target per symbol across the whole watchlist.
