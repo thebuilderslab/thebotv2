@@ -75,9 +75,9 @@ export async function getStoredThresholds(
 ): Promise<PolicyThresholds | null> {
   try {
     // Query agent memory for threshold JSON
-    const result = await queryOne(
+    const result = await queryOne<{ value: string }>(
       db,
-      `SELECT value FROM agent_memory
+      `SELECT value FROM agent_notes
        WHERE agent_id = ? AND key = 'policy_thresholds_json'
        LIMIT 1`,
       [agentId],
@@ -87,7 +87,7 @@ export async function getStoredThresholds(
       return null;  // Not yet initialized
     }
 
-    return JSON.parse(result.value as string) as PolicyThresholds;
+    return JSON.parse(result.value) as PolicyThresholds;
   } catch (err) {
     console.error(`[policy-impact-model] Failed to retrieve thresholds for ${agentId}:`, err);
     return null;
@@ -104,13 +104,14 @@ export async function updateStoredThresholds(
 ): Promise<void> {
   const now = new Date().toISOString();
   const json = JSON.stringify(thresholds);
+  const id = crypto.randomUUID();
 
   await run(
     db,
-    `INSERT INTO agent_memory (agent_id, key, value, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)
+    `INSERT INTO agent_notes (id, agent_id, key, value, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT(agent_id, key) DO UPDATE SET value = ?, updated_at = ?`,
-    [agentId, 'policy_thresholds_json', json, now, json, now],
+    [id, agentId, 'policy_thresholds_json', json, now, now, json, now],
   );
 }
 
