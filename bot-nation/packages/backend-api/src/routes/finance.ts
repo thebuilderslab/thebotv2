@@ -31,6 +31,13 @@ import {
   stagePendingOrder,
   formatOrderForTelegram,
 } from "../services/schwab-orders";
+import {
+  getStoredThresholds,
+  updateStoredThresholds,
+  validateThresholds,
+  type PolicyThresholds,
+} from "../services/policy-impact-model";
+import { formatThresholdPreview } from "../utils/telegram-format";
 
 export const financeRouter = new Hono<{ Bindings: Env }>();
 
@@ -376,4 +383,130 @@ financeRouter.get("/api/finance/orders/pending", async (c) => {
   `, []);
 
   return c.json({ orders, count: orders.length });
+});
+
+// ── POST /api/finance/thresholds/preview ────────────────────────────────────
+// Finance Lead submits proposed threshold changes for approval.
+// Returns Telegram preview message with current vs. proposed + impact summary.
+// Body: { thresholds: PolicyThresholds, rationale: string, finance_lead_id: string }
+
+financeRouter.post("/api/finance/thresholds/preview", async (c) => {
+  let body: {
+    thresholds?: PolicyThresholds;
+    rationale?: string;
+    finance_lead_id?: string;
+  };
+
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.thresholds || !body.rationale || !body.finance_lead_id) {
+    return c.json(
+      { error: "thresholds, rationale, and finance_lead_id are required" },
+      400,
+    );
+  }
+
+  // Validate proposed thresholds
+  const validationError = validateThresholds(body.thresholds);
+  if (validationError) {
+    return c.json({ error: validationError }, 400);
+  }
+
+  // Get current thresholds
+  const agentId = "agent-finance-lead";
+  const current = await getStoredThresholds(c.env.DB, agentId);
+
+  if (!current) {
+    return c.json({
+      status: "preview",
+      proposal_id: crypto.randomUUID(),
+      preview_message: "📊 <b>INITIAL THRESHOLD SETUP</b>\n\nThresholds not yet configured. Finance Lead first initialization.",
+      rationale: body.rationale,
+      current_state: "uninitialized",
+    });
+  }
+
+  // Format comparison
+  const currentObj = {
+    min_credit_roll: current.min_credit_roll,
+    debit_roll_tiers: current.debit_roll_tiers,
+    max_dte_days: current.max_dte_days,
+    delta_threshold: current.delta_threshold,
+  };
+
+  const proposedObj = {
+    min_credit_roll: body.thresholds.min_credit_roll,
+    debit_roll_tiers: body.thresholds.debit_roll_tiers,
+    max_dte_days: body.thresholds.max_dte_days,
+    delta_threshold: body.thresholds.delta_threshold,
+  };
+
+  const impactSummary = `<b>Impact:</b> Open positions will be re-evaluated against new thresholds on next Finance Lead task run.`;
+
+  const previewMessage = formatThresholdPreview(currentObj, proposedObj, impactSummary);
+
+  return c.json({
+    status: "preview",
+    proposal_id: crypto.randomUUID(),
+    preview_message: previewMessage,
+    rationale: body.rationale,
+    current_state: current,
+    proposed_state: body.thresholds,
+  });
+});
+
+// ── POST /api/finance/thresholds/apply ───────────────────────────────────────
+// Finance Lead approves threshold change via Telegram callback.
+// Called by telegram.ts handleCallbackQuery when ✅ button is tapped.
+// Body: { proposal_id: string, thresholds: PolicyThresholds }
+
+financeRouter.post("/api/finance/thresholds/apply", async (c) => {
+  let body: {
+    proposal_id?: string;
+    thresholds?: PolicyThresholds;
+  };
+
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.proposal_id || !body.thresholds) {
+    return c.json({ error: "proposal_id and thresholds are required" }, 400);
+  }
+
+  const validationError = validateThresholds(body.thresholds);
+  if (validationError) {
+    return c.json({ error: validationError }, 400);
+  }
+
+  const agentId = "agent-finance-lead";
+  await updateStoredThresholds(c.env.DB, agentId, body.thresholds);
+
+  // Log approval event
+  await run(c.env.DB,
+    `INSERT INTO events (kind, actor_id, target_id, target_kind, payload, created_at)
+     VALUES (?, ?, ?, ?, ?, datetime('now'))`,
+    [
+      "threshold.applied",
+      "agent-finance-lead",
+      body.proposal_id,
+      "threshold_proposal",
+      JSON.stringify({
+        thresholds: body.thresholds,
+        timestamp: new Date().toISOString(),
+      }),
+    ],
+  );
+
+  return c.json({
+    status: "applied",
+    message: "✅ Thresholds updated and active.",
+    thresholds: body.thresholds,
+  });
 });
