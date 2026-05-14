@@ -132,3 +132,34 @@ export function formatForTelegram(
     parseMode: null,
   }));
 }
+
+/**
+ * Format policy threshold preview for Telegram handoff.
+ * Shows current vs. proposed with impact summary.
+ */
+export function formatThresholdPreview(
+  current: Record<string, number | number[]>,
+  proposed: Record<string, number | number[]>,
+  impactSummary: string,
+): string {
+  const lines = ["📊 <b>THRESHOLD UPDATE PREVIEW</b>", ""];
+
+  lines.push("<b>CURRENT → PROPOSED:</b>");
+  for (const key of Object.keys(proposed)) {
+    const cur = current[key];
+    const prop = proposed[key];
+
+    if (Array.isArray(prop) && Array.isArray(cur)) {
+      const curStr = `[$${cur[0]}, $${cur[1]}]`;
+      const propStr = `[$${prop[0]}, $${prop[1]}]`;
+      const pctDelta = (((prop[0] - cur[0]) / cur[0]) * 100).toFixed(0);
+      lines.push(`• <code>${key}</code>: ${curStr} → ${propStr} (${pctDelta}%)`);
+    } else if (typeof prop === "number" && typeof cur === "number") {
+      const pctDelta = (((prop - cur) / cur) * 100).toFixed(1);
+      lines.push(`• <code>${key}</code>: ${cur} → ${prop} (${pctDelta}%)`);
+    }
+  }
+
+  lines.push("", impactSummary);
+  return escapeAgentHtml(lines.join("\n"));
+}

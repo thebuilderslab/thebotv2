@@ -33,6 +33,17 @@ import {
   distillTaskOutput,
 } from "../services/memory-service";
 import { formatForTelegram, stripHtmlToPlain } from "../utils/telegram-format";
+import {
+  recordPositionSnapshot,
+  compareMissedActions,
+  getMissedActions,
+  type PositionSnapshotRecord,
+} from "../services/position-snapshot";
+import {
+  evaluatePolicyDecision,
+  getStoredThresholds,
+  type PolicyThresholds,
+} from "../services/policy-impact-model";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -506,6 +517,89 @@ export class AgentActor implements DurableObject {
         totalTokens: promptTokens + completionTokens,
       },
       new Date().toISOString());
+
+    // ── Finance Lead: Record position snapshots & detect missed actions ────────
+    // After agent completes, automatically record snapshots for all open positions
+    // and detect threshold breaches compared to yesterday's decisions.
+    if (agentId === "agent-finance-lead") {
+      try {
+        const thresholds = await getStoredThresholds(this.env.DB, agentId);
+        if (!thresholds) {
+          console.warn("[AgentActor] Finance Lead thresholds not initialized; skipping snapshot recording");
+        } else {
+          // Load all open thinkorswim positions (has option-specific fields)
+          const positions = await query<any>(
+            this.env.DB,
+            `SELECT id, symbol, strategy, side, option_type, strike, expiry, quantity, trade_price, mark, pl_open, pl_pct, days_to_expiry, status
+             FROM tws_positions WHERE status = 'open' ORDER BY symbol`,
+            [],
+          );
+
+          for (const pos of positions) {
+            // Build position type from side + option type (e.g., LONG_CALL, SHORT_PUT)
+            const posType = [pos.side, pos.option_type].filter(Boolean).join("_").toUpperCase() || "UNKNOWN";
+
+            // Map tws_positions to PolicyDecision Position interface
+            const decision = evaluatePolicyDecision(
+              {
+                symbol: pos.symbol || "",
+                position_type: posType,
+                quantity: pos.quantity || 1,
+                entry_price: pos.trade_price || 0,
+                current_price: pos.mark || 0,
+                days_to_expiry: pos.days_to_expiry || 0,
+                underlying_price: 0,  // TODO: fetch from market data
+                pnl_pct: (pos.pl_pct || 0),
+              },
+              thresholds,
+            );
+
+            const snapshot: PositionSnapshotRecord = {
+              agent_id: agentId,
+              symbol: pos.symbol || "",
+              position_type: posType,
+              quantity: pos.quantity || 1,
+              entry_price: pos.trade_price || 0,
+              current_price: pos.mark || 0,
+              current_pnl_pct: pos.pl_pct || 0,
+              days_to_expiry: pos.days_to_expiry || 0,
+              delta: undefined,  // TODO: fetch from Schwab API or options_chain
+              theta: undefined,
+              vega: undefined,
+              underlying_price: 0,  // TODO: fetch from market data
+              policy_decision: decision.action,
+              decision_rationale: decision.rationale,
+              thresholds_at_snapshot: thresholds,
+              snapshot_type: "daily",
+            };
+            await recordPositionSnapshot(this.env.DB, snapshot);
+          }
+
+          // Detect missed actions by comparing today vs yesterday
+          const today = new Date().toISOString().split("T")[0];
+          const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+
+          let allMissedActions: any[] = [];
+          for (const pos of positions) {
+            const missed = await getMissedActions(
+              this.env.DB,
+              `${yesterday}T00:00:00Z`,
+              `${today}T23:59:59Z`,
+              pos.symbol,
+            );
+            allMissedActions = allMissedActions.concat(missed);
+          }
+
+          if (allMissedActions.length > 0) {
+            const missedActionsSummary = `\n\n📊 <b>MISSED ACTIONS DETECTED:</b>\n${allMissedActions.map((m) => `• ${m.symbol} (${m.missed_action_type}): ${m.notes}`).join("\n")}`;
+            finalText += missedActionsSummary;
+          }
+        }
+      } catch (snapErr) {
+        console.warn(`[AgentActor] Position snapshot recording failed for task ${taskId}:`, snapErr);
+        // Never crash — task completes with or without snapshots
+      }
+    }
 
     // Store response artifact
     artifactId = crypto.randomUUID();

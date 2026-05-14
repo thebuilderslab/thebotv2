@@ -21,6 +21,7 @@ import { routeTask } from "./services/task-router";
 import { getActiveWatchlist, refreshStreamingData } from "./services/thinkorswim-bridge";
 import { generatePriceTargets, formatTargetsForTelegram } from "./services/price-target-service";
 import { sendDedupedTelegram } from "./services/telegram-dedup";
+import { calculateMetrics } from "./services/metrics-backfill";
 
 const DISPATCH_LIMIT = 10;
 const PARENT_TIMEOUT_MINUTES = 60;
@@ -184,6 +185,44 @@ Format: one paragraph per held symbol. Lead with a one-line session summary (SPY
 6. TOMORROW'S PLAN: One specific action item for each position (HOLD / CLOSE AT OPEN / ROLL — with target strike and expiry).
 
 Format: one block per held position. Close with a single ACTION ITEM for the most urgent trade tomorrow morning.`,
+    agentId: "agent-finance-lead",
+    teamId: "team-finance",
+  },
+  // 4:35pm EDT (20:35 UTC) weekdays — Trade Decision Quality Metrics
+  "35 20 * * 1-5": {
+    kind: "content_generation",
+    summary: "Trade decision quality metrics calculation",
+    details: `Calculate daily trade decision quality metrics (automated — no manual input needed).
+
+This is a 5-minute post-EOD-wrap system task. Execute the following programmatically:
+
+1. FETCH POSITION SNAPSHOTS: Query the position_snapshots table for the last 30 days of records for agent-finance-lead.
+2. CALCULATE DAILY METRICS:
+   - Win Rate: (positions that reached price_target during hold) / (total_eligible_positions)
+   - Avg Winner: mean P&L% on closed winning positions
+   - Avg Loser: mean P&L% on closed losing positions
+   - Profit Factor: sum(gross_profits) / sum(gross_losses) — avoid divide-by-zero
+   - Opportunity Capture: (positions hitting target) / (total positions evaluated)
+
+3. COMPARE AGAINST TARGETS (hardcoded baseline):
+   - Win Rate target: ≥ 50%
+   - Avg Winner target: ≥ +50%
+   - Avg Loser target: ≤ -20%
+   - Profit Factor target: ≥ 2.0
+   - Opportunity Capture target: ≥ 70%
+
+4. INSERT TO trade_decision_quality_metrics TABLE:
+   - date: today
+   - agent_id: 'agent-finance-lead'
+   - metric_name: ['win_rate', 'avg_winner', 'avg_loser', 'profit_factor', 'opportunity_capture']
+   - value: calculated value
+   - target_threshold: baseline from step 3
+   - status: 'on_target' | 'below_target' | 'above_target'
+   - calculation_notes: brief summary
+
+5. DRIFT ALERT: If any metric drifts >10% below target, emit a Telegram message to the operator: "⚠️ Metrics Alert: [metric_name] drifted below target. Current: X%, Target: Y%. Review recent trades and consider threshold adjustment."
+
+Do not spawn additional tasks. Just calculate, insert rows, and alert if needed.`,
     agentId: "agent-finance-lead",
     teamId: "team-finance",
   },
@@ -548,6 +587,25 @@ async function runScheduledTick(
   // ── Supervisor 4-hour reminder ────────────────────────────────────────────────
   if (controller.cron === "0 6,10,14,18,22,2 * * *") {
     await sendSupervisorReminder(env, now);
+    return;
+  }
+
+  // ── Trade decision quality metrics calculation (4:35pm EDT weekdays) ──────────
+  // Runs automatically 2 min after EOD wrap-up. No agent needed — purely programmatic.
+  if (controller.cron === "35 20 * * 1-5") {
+    ctx.waitUntil((async () => {
+      try {
+        await calculateMetrics(env.DB, "agent-finance-lead", 30);
+        console.log("[scheduler/metrics] Trade decision quality metrics calculated");
+      } catch (err) {
+        console.error("[scheduler/metrics] metrics calculation failed:", err);
+        // Emit event so supervisor knows metrics failed
+        await emitEvent(env.DB, "metrics.calculation_failed", null, "system", "scheduler", {
+          error: err instanceof Error ? err.message : String(err),
+          cron: controller.cron,
+        }, null, now);
+      }
+    })());
     return;
   }
 
