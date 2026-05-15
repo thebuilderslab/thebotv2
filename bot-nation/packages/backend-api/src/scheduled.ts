@@ -23,6 +23,7 @@ import { generatePriceTargets, formatTargetsForTelegram } from "./services/price
 import { sendDedupedTelegram } from "./services/telegram-dedup";
 import { calculateMetrics } from "./services/metrics-backfill";
 import { sendProgressReport } from "./services/progress-report";
+import { getAccessToken } from "./services/schwab-auth";
 
 const DISPATCH_LIMIT = 10;
 const PARENT_TIMEOUT_MINUTES = 60;
@@ -597,7 +598,6 @@ async function runScheduledTick(
   if (controller.cron === "0 12 * * 1-5") {
     ctx.waitUntil((async () => {
       try {
-        // Cheap flag-gate read; defensively returns false if missing.
         const flagRow = await queryOne<{ value: string }>(
           env.DB,
           "SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='feature_flags_json' LIMIT 1",
@@ -622,6 +622,37 @@ async function runScheduledTick(
           error: err instanceof Error ? err.message : String(err),
           cron: controller.cron,
         }, null, now);
+      }
+    })());
+    return;
+  }
+
+  // ── A.11 Schwab Token Heartbeat (every 6 hours) ───────────────────────────────
+  // Calls getAccessToken to exercise the OAuth refresh path, keeping the Schwab
+  // refresh_token's 7-day rolling window alive. Emits events.kind='schwab.heartbeat'
+  // so A.12 progress classifier can detect A.11 LIVE.
+  if (controller.cron === "0 */6 * * *") {
+    ctx.waitUntil((async () => {
+      const heartbeatNow = new Date().toISOString();
+      if (!env.SCHWAB_CLIENT_ID || !env.SCHWAB_CLIENT_SECRET) {
+        console.warn("[scheduler/heartbeat] Schwab client credentials missing; skipping");
+        await emitEvent(env.DB, "schwab.heartbeat_skipped", null, "system", "scheduler", {
+          reason: "missing_credentials",
+        }, null, heartbeatNow);
+        return;
+      }
+      try {
+        await getAccessToken(env.DB, env.SCHWAB_CLIENT_ID, env.SCHWAB_CLIENT_SECRET);
+        await emitEvent(env.DB, "schwab.heartbeat", null, "system", "scheduler", {
+          cron: controller.cron,
+        }, null, heartbeatNow);
+        console.log("[scheduler/heartbeat] Schwab token refreshed");
+      } catch (err) {
+        console.error("[scheduler/heartbeat] Schwab token refresh failed:", err);
+        await emitEvent(env.DB, "schwab.refresh_failed", null, "system", "scheduler", {
+          error: err instanceof Error ? err.message : String(err),
+          cron: controller.cron,
+        }, null, heartbeatNow);
       }
     })());
     return;
