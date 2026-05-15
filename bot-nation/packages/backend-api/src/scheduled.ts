@@ -22,6 +22,7 @@ import { getActiveWatchlist, refreshStreamingData } from "./services/thinkorswim
 import { generatePriceTargets, formatTargetsForTelegram } from "./services/price-target-service";
 import { sendDedupedTelegram } from "./services/telegram-dedup";
 import { calculateMetrics } from "./services/metrics-backfill";
+import { sendProgressReport } from "./services/progress-report";
 
 const DISPATCH_LIMIT = 10;
 const PARENT_TIMEOUT_MINUTES = 60;
@@ -587,6 +588,42 @@ async function runScheduledTick(
   // ── Supervisor 4-hour reminder ────────────────────────────────────────────────
   if (controller.cron === "0 6,10,14,18,22,2 * * *") {
     await sendSupervisorReminder(env, now);
+    return;
+  }
+
+  // ── A.12 Daily Finance-Intel Progress Report (8:00 AM ET weekdays = 12:00 UTC) ─
+  // Read-only D1 probes + one Telegram send + one events.kind='progress.report_sent'.
+  // Gated on agent_notes.feature_flags_json.enable_progress_report; if absent, no-op.
+  if (controller.cron === "0 12 * * 1-5") {
+    ctx.waitUntil((async () => {
+      try {
+        // Cheap flag-gate read; defensively returns false if missing.
+        const flagRow = await queryOne<{ value: string }>(
+          env.DB,
+          "SELECT value FROM agent_notes WHERE agent_id='agent-finance-lead' AND key='feature_flags_json' LIMIT 1",
+          [],
+        );
+        let enabled = false;
+        if (flagRow?.value) {
+          try {
+            const flags = JSON.parse(flagRow.value) as Record<string, unknown>;
+            enabled = flags.enable_progress_report === true;
+          } catch { enabled = false; }
+        }
+        if (!enabled) {
+          console.log("[scheduler/progress-report] enable_progress_report=false; skipping");
+          return;
+        }
+        await sendProgressReport(env);
+        console.log("[scheduler/progress-report] sent daily report");
+      } catch (err) {
+        console.error("[scheduler/progress-report] daily report failed:", err);
+        await emitEvent(env.DB, "progress.report_failed", null, "system", "scheduler", {
+          error: err instanceof Error ? err.message : String(err),
+          cron: controller.cron,
+        }, null, now);
+      }
+    })());
     return;
   }
 

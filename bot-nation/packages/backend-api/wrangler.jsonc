@@ -54,7 +54,9 @@
       // Position exit monitor — 3:00pm ET weekdays (19:00 UTC), 60 min before close
       "0 19 * * 1-5",
       // Trade decision quality metrics — 4:35pm ET weekdays (20:35 UTC), 5min after EOD
-      "35 20 * * 1-5"
+      "35 20 * * 1-5",
+      // A.12 Daily Finance-Intel progress report — 8:00 AM ET weekdays (12:00 UTC)
+      "0 12 * * 1-5"
     ]
   },
   "ai": {
