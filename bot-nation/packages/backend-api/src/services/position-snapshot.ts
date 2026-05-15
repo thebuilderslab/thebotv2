@@ -27,13 +27,17 @@ export interface PositionSnapshotRecord {
   current_pnl_pct: number;
   days_to_expiry: number;
   delta?: number;
+  gamma?: number;                     // A.6 (Layer 2)
   theta?: number;
   vega?: number;
+  implied_volatility?: number;        // A.6 (Layer 2)
   underlying_price: number;
   policy_decision: string;
   decision_rationale: string;
   thresholds_at_snapshot: PolicyThresholds;
   snapshot_type: 'daily' | 'on_trade';  // cadence marker
+  enrichment_method?: 'schwab_chain' | 'failed';  // A.6 audit
+  enrichment_failed?: 0 | 1;          // A.6 audit (default 0)
 }
 
 export interface MissedActionRecord {
@@ -67,10 +71,11 @@ export async function recordPositionSnapshot(
     `INSERT INTO position_snapshots (
        id, agent_id, timestamp, symbol, position_type,
        quantity, entry_price, current_price, current_pnl_pct,
-       days_to_expiry, delta, theta, vega, underlying_price,
-       policy_decision, decision_rationale, thresholds_at_snapshot,
+       days_to_expiry, delta, gamma, theta, vega, implied_volatility,
+       underlying_price, policy_decision, decision_rationale,
+       thresholds_at_snapshot, enrichment_method, enrichment_failed,
        created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       data.agent_id,
@@ -83,12 +88,16 @@ export async function recordPositionSnapshot(
       data.current_pnl_pct,
       data.days_to_expiry,
       data.delta ?? null,
+      data.gamma ?? null,
       data.theta ?? null,
       data.vega ?? null,
+      data.implied_volatility ?? null,
       data.underlying_price,
       data.policy_decision,
       data.decision_rationale,
       threshholdsJson,
+      data.enrichment_method ?? null,
+      data.enrichment_failed ?? 0,
       now,
     ],
   );

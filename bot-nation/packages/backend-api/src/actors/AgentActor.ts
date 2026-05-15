@@ -14,7 +14,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { query, queryOne, run } from "../db/schema";
 import { executeTool } from "../services/tool-executor";
-import { fetchQuotes, getStoredPositions, syncPositions } from "../services/schwab-positions";
+import { fetchQuotes, fetchOptionsChain, getStoredPositions, syncPositions, type OptionContract, type OptionsChainResult } from "../services/schwab-positions";
 import { getAccessToken } from "../services/schwab-auth";
 import { stagePendingOrder } from "../services/schwab-orders";
 import { resolveModel, OPENROUTER_BASE_URL, OPENROUTER_APP_NAME, OPENROUTER_APP_URL } from "../services/model-router";
@@ -39,6 +39,8 @@ import {
   getMissedActions,
   type PositionSnapshotRecord,
 } from "../services/position-snapshot";
+import { recordWatchlistSnapshot } from "../services/watchlist-snapshot";
+import { matchChainRow, ChainRowNotFound } from "../services/chain-match";
 import {
   evaluatePolicyDecision,
   getStoredThresholds,
@@ -521,12 +523,26 @@ export class AgentActor implements DurableObject {
     // ── Finance Lead: Record position snapshots & detect missed actions ────────
     // After agent completes, automatically record snapshots for all open positions
     // and detect threshold breaches compared to yesterday's decisions.
+    //
+    // A.6 (Layer 2): When `enable_greeks_enrichment` is on, fetch the Schwab options
+    // chain row matching (underlying, strike, expiry, option_type) by EXACT MATCH and
+    // populate delta/gamma/theta/vega/IV + underlying_price. On exact-match failure or
+    // chain-API failure, the snapshot is still written with all Greek/IV fields NULL
+    // and enrichment_failed=1. No fuzzy matching is performed under any circumstance.
+    //
+    // This block runs ONLY inside the AgentActor Finance Lead EOD branch, never in
+    // interactive or ad-hoc flows.
     if (agentId === "agent-finance-lead") {
       try {
         const thresholds = await getStoredThresholds(this.env.DB, agentId);
         if (!thresholds) {
           console.warn("[AgentActor] Finance Lead thresholds not initialized; skipping snapshot recording");
         } else {
+          // A.6: read enable_greeks_enrichment flag from agent_notes.feature_flags_json
+          // Default to false when absent (per Config Source Precedence in plan §11).
+          const enableEnrichment = await this.readFeatureFlag(agentId, "enable_greeks_enrichment");
+          const haveSchwabSecrets = !!(this.env.SCHWAB_CLIENT_ID && this.env.SCHWAB_CLIENT_SECRET);
+
           // Load all open thinkorswim positions (has option-specific fields)
           const positions = await query<any>(
             this.env.DB,
@@ -535,9 +551,90 @@ export class AgentActor implements DurableObject {
             [],
           );
 
+          // A.6: prefetch one chain per unique underlying to minimise Schwab API calls.
+          const chainByUnderlying: Map<string, OptionsChainResult> = new Map();
+          if (enableEnrichment && haveSchwabSecrets) {
+            const uniqueUnderlyings = [...new Set(positions
+              .filter((p: any) => p.option_type) // option positions only
+              .map((p: any) => (p.symbol ?? "").toUpperCase())
+              .filter(Boolean))] as string[];
+            for (const underlying of uniqueUnderlyings) {
+              try {
+                const chain = await fetchOptionsChain(
+                  this.env.DB,
+                  this.env.SCHWAB_CLIENT_ID!,
+                  this.env.SCHWAB_CLIENT_SECRET!,
+                  underlying,
+                  { contractType: "ALL", strikeCount: 50 },
+                );
+                chainByUnderlying.set(underlying, chain);
+              } catch (chainErr) {
+                console.warn(`[AgentActor] fetchOptionsChain failed for ${underlying}:`, chainErr);
+                await this.emitEvent(taskId, "enrichment.chain_failure", {
+                  underlying,
+                  error: chainErr instanceof Error ? chainErr.message : String(chainErr),
+                }, new Date().toISOString());
+                // Leave chainByUnderlying without this entry → per-position enrichment will fall through to failed path.
+              }
+            }
+          }
+
           for (const pos of positions) {
             // Build position type from side + option type (e.g., LONG_CALL, SHORT_PUT)
             const posType = [pos.side, pos.option_type].filter(Boolean).join("_").toUpperCase() || "UNKNOWN";
+
+            // A.6: exact-match the option position to a chain contract.
+            // No fuzzy matching: exact strike, exact expiry, exact contract_type.
+            let enrichedDelta: number | undefined = undefined;
+            let enrichedGamma: number | undefined = undefined;
+            let enrichedTheta: number | undefined = undefined;
+            let enrichedVega: number | undefined = undefined;
+            let enrichedIV: number | undefined = undefined;
+            let enrichedUnderlying = 0;
+            let enrichmentMethod: "schwab_chain" | "failed" | undefined = undefined;
+            let enrichmentFailed: 0 | 1 = 0;
+
+            if (enableEnrichment && pos.option_type) {
+              const underlyingSym = (pos.symbol ?? "").toUpperCase();
+              const chain = chainByUnderlying.get(underlyingSym);
+              if (chain) {
+                try {
+                  const matched = matchChainRow(chain, {
+                    strike: pos.strike,
+                    expiry: pos.expiry,
+                    contract_type: pos.option_type,
+                  });
+                  enrichedDelta = matched.delta;
+                  enrichedGamma = matched.gamma;
+                  enrichedTheta = matched.theta;
+                  enrichedVega = matched.vega;
+                  enrichedIV = matched.iv;
+                  enrichedUnderlying = chain.underlying_price;
+                  enrichmentMethod = "schwab_chain";
+                  enrichmentFailed = 0;
+                } catch (matchErr) {
+                  enrichmentMethod = "failed";
+                  enrichmentFailed = 1;
+                  if (matchErr instanceof ChainRowNotFound) {
+                    await this.emitEvent(taskId, "enrichment.match_missing", {
+                      underlying: underlyingSym,
+                      strike: pos.strike,
+                      expiry: pos.expiry,
+                      option_type: pos.option_type,
+                    }, new Date().toISOString());
+                  } else {
+                    await this.emitEvent(taskId, "enrichment.match_error", {
+                      underlying: underlyingSym,
+                      error: matchErr instanceof Error ? matchErr.message : String(matchErr),
+                    }, new Date().toISOString());
+                  }
+                }
+              } else {
+                // Chain fetch failed earlier; emit per-position failure marker.
+                enrichmentMethod = "failed";
+                enrichmentFailed = 1;
+              }
+            }
 
             // Map tws_positions to PolicyDecision Position interface
             const decision = evaluatePolicyDecision(
@@ -548,7 +645,7 @@ export class AgentActor implements DurableObject {
                 entry_price: pos.trade_price || 0,
                 current_price: pos.mark || 0,
                 days_to_expiry: pos.days_to_expiry || 0,
-                underlying_price: 0,  // TODO: fetch from market data
+                underlying_price: enrichedUnderlying,
                 pnl_pct: (pos.pl_pct || 0),
               },
               thresholds,
@@ -563,16 +660,54 @@ export class AgentActor implements DurableObject {
               current_price: pos.mark || 0,
               current_pnl_pct: pos.pl_pct || 0,
               days_to_expiry: pos.days_to_expiry || 0,
-              delta: undefined,  // TODO: fetch from Schwab API or options_chain
-              theta: undefined,
-              vega: undefined,
-              underlying_price: 0,  // TODO: fetch from market data
+              delta: enrichedDelta,
+              gamma: enrichedGamma,
+              theta: enrichedTheta,
+              vega: enrichedVega,
+              implied_volatility: enrichedIV,
+              underlying_price: enrichedUnderlying,
               policy_decision: decision.action,
               decision_rationale: decision.rationale,
               thresholds_at_snapshot: thresholds,
               snapshot_type: "daily",
+              enrichment_method: enrichmentMethod,
+              enrichment_failed: enrichmentFailed,
             };
             await recordPositionSnapshot(this.env.DB, snapshot);
+          }
+
+          // A.6: watchlist snapshots — one row per active tws_watchlist symbol per EOD.
+          if (enableEnrichment && haveSchwabSecrets) {
+            try {
+              const watchlist = await query<{ symbol: string }>(
+                this.env.DB,
+                "SELECT symbol FROM tws_watchlist WHERE active = 1 ORDER BY symbol",
+                [],
+              );
+              const wlSymbols = watchlist.map((w) => (w.symbol ?? "").toUpperCase()).filter(Boolean);
+              if (wlSymbols.length > 0) {
+                const quotes = await fetchQuotes(
+                  this.env.DB,
+                  this.env.SCHWAB_CLIENT_ID!,
+                  this.env.SCHWAB_CLIENT_SECRET!,
+                  wlSymbols,
+                );
+                const wlNow = new Date().toISOString();
+                for (const q of quotes) {
+                  await recordWatchlistSnapshot(this.env.DB, {
+                    symbol: q.symbol,
+                    close_price: q.last_price,
+                    volume: q.volume ?? null,
+                    recorded_at: wlNow,
+                  });
+                }
+              }
+            } catch (wlErr) {
+              console.warn(`[AgentActor] watchlist enrichment failed:`, wlErr);
+              await this.emitEvent(taskId, "enrichment.quotes_failure", {
+                error: wlErr instanceof Error ? wlErr.message : String(wlErr),
+              }, new Date().toISOString());
+            }
           }
 
           // Detect missed actions by comparing today vs yesterday
@@ -2051,5 +2186,26 @@ ${originalText.slice(0, 2500)}`,
        VALUES (?, ?, NULL, 'task', ?, ?, NULL, ?, ?)`,
       [id, kind, taskId, JSON.stringify(payload), now, now],
     );
+  }
+
+  /**
+   * A.6+: read a boolean feature flag from agent_notes.feature_flags_json.
+   * Default false when the note or the key is absent (per Config Source Precedence).
+   * The flag is a property of the agent_notes row keyed on agent_id with
+   * key='feature_flags_json' and value=JSON object of boolean flags.
+   */
+  private async readFeatureFlag(agentId: string, flagName: string): Promise<boolean> {
+    try {
+      const row = await queryOne<{ value: string }>(
+        this.env.DB,
+        "SELECT value FROM agent_notes WHERE agent_id = ? AND key = 'feature_flags_json' LIMIT 1",
+        [agentId],
+      );
+      if (!row?.value) return false;
+      const flags = JSON.parse(row.value) as Record<string, unknown>;
+      return flags[flagName] === true;
+    } catch {
+      return false;
+    }
   }
 }
