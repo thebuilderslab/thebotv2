@@ -56,7 +56,9 @@
       // Trade decision quality metrics — 4:35pm ET weekdays (20:35 UTC), 5min after EOD
       "35 20 * * 1-5",
       // A.12 Daily Finance-Intel progress report — 8:00 AM ET weekdays (12:00 UTC)
-      "0 12 * * 1-5"
+      "0 12 * * 1-5",
+      // A.11 Schwab token heartbeat — every 6 hours; keeps refresh_token alive
+      "0 */6 * * *"
     ]
   },
   "ai": {
