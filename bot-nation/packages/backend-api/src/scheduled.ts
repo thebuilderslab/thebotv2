@@ -23,7 +23,7 @@ import { generatePriceTargets, formatTargetsForTelegram } from "./services/price
 import { sendDedupedTelegram } from "./services/telegram-dedup";
 import { calculateMetrics } from "./services/metrics-backfill";
 import { sendProgressReport } from "./services/progress-report";
-import { getAccessToken } from "./services/schwab-auth";
+import { getAccessToken, loadTokens } from "./services/schwab-auth";
 
 const DISPATCH_LIMIT = 10;
 const PARENT_TIMEOUT_MINUTES = 60;
@@ -636,22 +636,20 @@ async function runScheduledTick(
       const heartbeatNow = new Date().toISOString();
       if (!env.SCHWAB_CLIENT_ID || !env.SCHWAB_CLIENT_SECRET) {
         console.warn("[scheduler/heartbeat] Schwab client credentials missing; skipping");
-        await emitEvent(env.DB, "schwab.heartbeat_skipped", null, "system", "scheduler", {
-          reason: "missing_credentials",
-        }, null, heartbeatNow);
         return;
       }
       try {
         await getAccessToken(env.DB, env.SCHWAB_CLIENT_ID, env.SCHWAB_CLIENT_SECRET);
-        await emitEvent(env.DB, "schwab.heartbeat", null, "system", "scheduler", {
-          cron: controller.cron,
+        // Load token to capture expires_at for event payload
+        const tokens = await loadTokens(env.DB);
+        await emitEvent(env.DB, "schwab.heartbeat", "agent-finance-lead", "agent", "agent-finance-lead", {
+          token_expires_at: tokens?.expires_at,
         }, null, heartbeatNow);
         console.log("[scheduler/heartbeat] Schwab token refreshed");
       } catch (err) {
         console.error("[scheduler/heartbeat] Schwab token refresh failed:", err);
-        await emitEvent(env.DB, "schwab.refresh_failed", null, "system", "scheduler", {
+        await emitEvent(env.DB, "schwab.refresh_failed", "agent-finance-lead", "agent", "agent-finance-lead", {
           error: err instanceof Error ? err.message : String(err),
-          cron: controller.cron,
         }, null, heartbeatNow);
       }
     })());
