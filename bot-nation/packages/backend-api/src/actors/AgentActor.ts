@@ -1523,8 +1523,11 @@ export class AgentActor implements DurableObject {
     // ── Extract ACTION ITEM and move it to the top ────────────────────────────
     const actionItemMatch = trimmedBody.match(/---\s*\n(ACTION[^:]*:.*?)(?:\n|$)/i)
       ?? trimmedBody.match(/(ACTION ITEM:.*?)(?:\n──|$)/is);
+    // A.5a fix: trimmedBody is already HTML-safe (escapeHtml ran in line 1499
+    // before markdownToHtml). Re-escaping here double-encodes our own <b> tags,
+    // surfacing literal "<b>URGENT</b>" text in Telegram. Use the match as-is.
     const actionLine = actionItemMatch
-      ? `🎯 <b>${escapeHtml((actionItemMatch[1] ?? "").replace(/^ACTION[^:]*:\s*/i, "ACTION: ").trim())}</b>\n`
+      ? `🎯 <b>${(actionItemMatch[1] ?? "").replace(/^ACTION[^:]*:\s*/i, "ACTION: ").trim()}</b>\n`
       : "";
     // Strip ACTION ITEM and TRADE_ORDER block from body (both are surfaced elsewhere)
     const cleanBody = trimmedBody
