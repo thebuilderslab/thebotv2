@@ -17,6 +17,7 @@
 import { Hono } from 'hono';
 import type { Env } from "../index";
 import type { ApprovalBrief } from "@bot-nation/core-domain";
+import { TASK_KIND_ROUTING } from "@bot-nation/core-domain";
 import { applyChangeForApproval } from "../services/change-apply";
 import { query, queryOne, run } from "../db/schema";
 import { sanitiseInput } from "../services/guardrails";
@@ -43,29 +44,7 @@ function progressBar(filled: number, total: number, width = 10): string {
 export const telegramRouter = new Hono();
 
 // ── Valid task kinds ──────────────────────────────────────────────────────────
-
-const TASK_KIND_ROUTING: Record<string, { teamId: string; agentId: string }> = {
-  // Bot Nation core
-  research:             { teamId: "team-research", agentId: "agent-research-lead" },
-  deep_research:        { teamId: "team-research", agentId: "agent-research-lead" },
-  content_generation:   { teamId: "team-growth",   agentId: "agent-growth-lead" },
-  code_change:          { teamId: "team-build",     agentId: "agent-build-lead" },
-  improvement_proposal: { teamId: "team-build",     agentId: "agent-build-lead" },
-  config_change:        { teamId: "team-infra",     agentId: "agent-infra-lead" },
-  wallet_simulation:    { teamId: "team-finance",   agentId: "agent-finance-lead" },
-  // projecT87 DeFi
-  defi_plan:            { teamId: "team-p87",       agentId: "agent-p87-planner" },
-  defi_risk_check:      { teamId: "team-p87",       agentId: "agent-p87-risk" },
-  defi_health_monitor:  { teamId: "team-p87",       agentId: "agent-p87-nurse" },
-  defi_report:          { teamId: "team-p87",       agentId: "agent-p87-nurse" },
-  // The Agency sales
-  market_research:      { teamId: "team-agency",    agentId: "agent-agency-growthops" },
-  campaign_generation:  { teamId: "team-agency",    agentId: "agent-agency-growthops" },
-  lead_qualification:   { teamId: "team-agency",    agentId: "agent-agency-pipelineops" },
-  crm_hygiene:          { teamId: "team-agency",    agentId: "agent-agency-revops" },
-  // Intel — repo + link review
-  intel_review:         { teamId: "team-intel",     agentId: "agent-intel-lead" },
-};
+// TASK_KIND_ROUTING is imported from @bot-nation/core-domain (single source of truth).
 
 // ── URL patterns that trigger automatic intel review ─────────────────────────
 const INTEL_URL_PATTERN = /https?:\/\/(github\.com|gitlab\.com|bitbucket\.org|instagram\.com|twitter\.com|x\.com|ossinsight\.io)[^\s]*/gi;

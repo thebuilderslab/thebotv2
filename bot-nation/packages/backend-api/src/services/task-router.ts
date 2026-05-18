@@ -9,18 +9,9 @@
  */
 
 import { queryOne } from "../db/schema";
+import { KIND_TO_DOMAIN } from "@bot-nation/core-domain";
 
-// ── kind → domain mapping ─────────────────────────────────────────────────────
-// Maps TaskKind values to the team domain that owns that kind of work.
-
-const KIND_TO_DOMAIN: Record<string, string> = {
-  research:             "knowledge",
-  code_change:          "execution_product",
-  config_change:        "execution_infra",
-  improvement_proposal: "governance",
-  wallet_simulation:    "execution_finance",
-  content_generation:   "execution_growth",
-};
+// KIND_TO_DOMAIN is imported from @bot-nation/core-domain (single source of truth).
 
 export interface RouteResult {
   teamId: string | null;
