@@ -1,0 +1,14 @@
+{
+  "delegation_manager": {
+    "address": "0x51fadC2078b65cf4318a2bf4fb7F255AfdF677b2",
+    "tx": "0xd512467087bc848474c83e0de8da949c5b71c2a233406fec1069b7b3ea329050"
+  },
+  "openclaw_vault": {
+    "address": "0x4a6B37749120EB5bbdC3422a0fDc0ba588d4390c",
+    "tx": "0xc4a201e1fcc12602296f836588bc6155e4389e4e3ef12d16177f2a55242aa88f"
+  },
+  "bot_operator": "0xbbd55BB128645c16D6DEa9f1866bd9a7e7fC9c48",
+  "deployer": "0xbbd55BB128645c16D6DEa9f1866bd9a7e7fC9c48",
+  "chain_id": 42161,
+  "timestamp": 1771734120
+}

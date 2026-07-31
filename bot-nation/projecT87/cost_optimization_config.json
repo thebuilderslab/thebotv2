@@ -1,0 +1,30 @@
+{
+  "api_limits": {
+    "daily_credit_limit": 833,
+    "hourly_credit_limit": 100,
+    "coinapi_cost_per_call": 1,
+    "coinmarketcap_cost_per_call": 1
+  },
+  "interval_settings": {
+    "base_interval": 130,
+    "max_interval": 1800,
+    "current_interval": 130
+  },
+  "budget_thresholds": {
+    "warning_threshold_percent": 80,
+    "critical_threshold_percent": 95,
+    "emergency_stop_percent": 98
+  },
+  "usage_tracking": {
+    "reset_hourly": true,
+    "reset_daily": true,
+    "persist_usage": true,
+    "usage_file": "api_usage_tracking.json"
+  },
+  "metadata": {
+    "last_updated": 1758999299.762012,
+    "version": "1.0.0",
+    "description": "Cost optimization configuration for API budget management",
+    "created_by": "system_configuration_update"
+  }
+}

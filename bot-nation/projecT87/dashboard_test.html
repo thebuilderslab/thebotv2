@@ -1,0 +1,60 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f0f0f0; }
+        .test-box { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .pass { border-left: 4px solid #4CAF50; }
+        .fail { border-left: 4px solid #F44336; }
+        .loading { border-left: 4px solid #FF9800; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Dashboard Connectivity Test</h1>
+    
+    <div id="api-test" class="test-box loading">
+        <strong>API Test:</strong> <span id="api-result">Testing...</span>
+    </div>
+    
+    <div id="parameters-test" class="test-box loading">
+        <strong>Parameters API:</strong> <span id="parameters-result">Testing...</span>
+    </div>
+    
+    <div id="emergency-test" class="test-box loading">
+        <strong>Emergency Status API:</strong> <span id="emergency-result">Testing...</span>
+    </div>
+    
+    <div id="dashboard-link" class="test-box" style="text-align: center; margin-top: 20px;">
+        <a href="/" style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+            🏠 Go to Main Dashboard
+        </a>
+    </div>
+
+    <script>
+        async function testAPI(endpoint, resultId, testId) {
+            try {
+                const response = await fetch(endpoint);
+                const data = await response.json();
+                
+                if (response.ok) {
+                    document.getElementById(resultId).textContent = `✅ Working (${response.status})`;
+                    document.getElementById(testId).className = 'test-box pass';
+                } else {
+                    document.getElementById(resultId).textContent = `❌ Failed (${response.status})`;
+                    document.getElementById(testId).className = 'test-box fail';
+                }
+            } catch (error) {
+                document.getElementById(resultId).textContent = `❌ Error: ${error.message}`;
+                document.getElementById(testId).className = 'test-box fail';
+            }
+        }
+
+        // Run tests
+        testAPI('/api/test', 'api-result', 'api-test');
+        testAPI('/api/parameters', 'parameters-result', 'parameters-test');
+        testAPI('/api/emergency_status', 'emergency-result', 'emergency-test');
+    </script>
+</body>
+</html>

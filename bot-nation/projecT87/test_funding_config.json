@@ -1,0 +1,8 @@
+{
+  "test_mode": true,
+  "bypass_funding_checks": true,
+  "min_eth_override": 0.001,
+  "min_usdc_override": 0.1,
+  "warning": "TEST MODE ACTIVE - REDUCED FUNDING REQUIREMENTS",
+  "created_at": "1752451639.9044034"
+}

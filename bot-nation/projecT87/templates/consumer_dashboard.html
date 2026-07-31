@@ -1,0 +1,2491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>REAA - Real Estate Agent Assistant</title>
+<style>
+:root {
+  --bg: #0a0e17;
+  --surface: rgba(17,24,39,0.85);
+  --surface2: #1a2236;
+  --surface3: rgba(26,34,54,0.6);
+  --border: rgba(30,41,59,0.7);
+  --border-glow: rgba(0,230,180,0.15);
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #00e6b4;
+  --accent2: #3b82f6;
+  --accent3: #8b5cf6;
+  --green: #10b981;
+  --red: #ef4444;
+  --orange: #f59e0b;
+  --yellow: #eab308;
+  --radius: 16px;
+  --glow-green: 0 0 20px rgba(0,230,180,0.3);
+  --glow-yellow: 0 0 20px rgba(234,179,8,0.3);
+  --glow-red: 0 0 20px rgba(239,68,68,0.3);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 0%, rgba(0,230,180,0.06) 0%, transparent 60%),
+              radial-gradient(ellipse at 80% 80%, rgba(59,130,246,0.04) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.topbar {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:14px 28px; background:var(--surface); border-bottom:1px solid var(--border);
+  backdrop-filter: blur(12px); position:relative; z-index:10;
+}
+.topbar-left { display:flex; align-items:center; gap:12px; }
+.topbar h1 { font-size:18px; font-weight:700; letter-spacing:-0.5px; }
+.topbar h1 span { color:var(--accent); }
+.topbar-right { display:flex; align-items:center; gap:12px; }
+.network-badge {
+  display:flex; align-items:center; gap:6px; padding:6px 14px;
+  border-radius:20px; background:var(--surface2); border:1px solid var(--border);
+  font-size:12px; color:var(--muted);
+}
+.network-badge .dot { width:6px; height:6px; border-radius:50%; background:var(--green); }
+.wallet-btn {
+  padding:8px 18px; border-radius:20px; border:none; cursor:pointer;
+  font-size:13px; font-weight:600; transition:all .2s;
+}
+.wallet-btn.connect { background:var(--accent); color:#0a0e17; }
+.wallet-btn.connect:hover { box-shadow: 0 0 16px rgba(0,230,180,0.4); }
+.wallet-btn.connected { background:var(--surface2); color:var(--accent); border:1px solid var(--accent); }
+
+.main-container { position:relative; z-index:1; max-width:1440px; margin:0 auto; padding:20px 24px; }
+
+.nav-tabs {
+  display:flex; gap:4px; background:var(--surface); border:1px solid var(--border);
+  border-radius:12px; padding:4px; margin-bottom:20px; backdrop-filter:blur(8px);
+}
+.nav-tab {
+  padding:8px 20px; border-radius:8px; border:none; background:transparent;
+  color:var(--muted); font-size:13px; font-weight:500; cursor:pointer; transition:all .2s;
+}
+.nav-tab.active { background:var(--accent); color:#0a0e17; font-weight:600; }
+.nav-tab:hover:not(.active) { color:var(--text); }
+
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+
+.command-center {
+  display: grid;
+  grid-template-columns: 280px 1fr 300px;
+  grid-template-rows: auto auto;
+  gap: 20px;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+.panel-header {
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-header h2 { font-size: 14px; font-weight: 600; letter-spacing: 0.5px; }
+.panel-header .icon { font-size: 16px; }
+.panel-body { padding: 16px 20px; }
+
+.defi-panel { grid-row: 1; grid-column: 1; }
+.center-panel { grid-row: 1; grid-column: 2; display:flex; flex-direction:column; align-items:center; }
+.pipeline-panel { grid-row: 1; grid-column: 3; }
+.income-panel { grid-row: 2; grid-column: 1 / -1; }
+
+.defi-metric {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:10px 0; border-bottom:1px solid rgba(30,41,59,0.4);
+}
+.defi-metric:last-child { border-bottom:none; }
+.defi-metric .label { font-size:12px; color:var(--muted); }
+.defi-metric .val { font-size:15px; font-weight:600; }
+.defi-metric .val.green { color:var(--green); }
+.defi-metric .val.red { color:var(--red); }
+.defi-metric .val.accent { color:var(--accent); }
+
+.defi-actions-title { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-top:16px; margin-bottom:8px; }
+.defi-action-item {
+  display:flex; align-items:center; gap:8px; padding:6px 0;
+  font-size:12px; color:var(--muted);
+}
+.defi-action-item .dot { width:5px; height:5px; border-radius:50%; flex-shrink:0; }
+
+.delegation-section { margin-top:16px; padding-top:14px; border-top:1px solid var(--border); }
+.delegation-title { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; }
+.delegation-status-row { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+.delegation-badge { font-size:11px; padding:3px 10px; border-radius:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; }
+.delegation-badge.none { background:var(--surface2); color:var(--muted); }
+.delegation-badge.active { background:rgba(34,197,94,0.15); color:var(--green); }
+.delegation-badge.revoked { background:rgba(239,68,68,0.15); color:var(--red); }
+.delegation-info { font-size:11px; color:var(--muted); line-height:1.5; margin-bottom:10px; }
+.delegation-detail { display:flex; justify-content:space-between; align-items:center; font-size:12px; padding:4px 0; }
+.delegation-detail .label { color:var(--muted); }
+.delegation-detail .val { font-weight:600; }
+.delegation-btn {
+  width:100%; padding:8px 12px; border:none; border-radius:8px; font-size:12px;
+  font-weight:600; cursor:pointer; margin-top:8px; transition:all 0.2s;
+}
+.delegation-btn.activate { background:var(--accent); color:#fff; }
+.delegation-btn.activate:hover { filter:brightness(1.2); }
+.delegation-btn.revoke { background:var(--surface2); color:var(--red); border:1px solid var(--red); }
+.delegation-btn.revoke:hover { background:rgba(239,68,68,0.1); }
+.delegation-btn:disabled { opacity:0.5; cursor:not-allowed; }
+.delegation-tx-link { font-size:11px; color:var(--accent); text-decoration:none; }
+.delegation-tx-link:hover { text-decoration:underline; }
+
+.usdc-meter { margin-top: 12px; }
+.usdc-meter-label {
+  display: flex; justify-content: space-between; font-size: 12px; color: #9ca3af;
+}
+.usdc-meter-bar {
+  margin-top: 4px; width: 100%; height: 6px; border-radius: 999px;
+  background: #111827; overflow: hidden;
+}
+.usdc-meter-bar .usdc-meter-fill {
+  height: 100%; width: 0%; border-radius: 999px;
+  background: linear-gradient(90deg, #22c55e, #0ea5e9);
+  transition: width 0.3s ease;
+}
+
+.health-ring-container {
+  position: relative;
+  width: 280px;
+  height: 280px;
+  margin: 20px auto;
+}
+.health-ring-svg {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+.ring-bg {
+  fill: none;
+  stroke: var(--surface2);
+  stroke-width: 8;
+}
+.ring-fill {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+}
+.ring-glow {
+  fill: none;
+  stroke-width: 12;
+  stroke-linecap: round;
+  opacity: 0.3;
+  filter: blur(4px);
+  transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+}
+
+.ring-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.avatar-frame {
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 20px rgba(0,230,180,0.3);
+  cursor: pointer;
+  transition: box-shadow 0.3s;
+}
+.avatar-frame:hover { box-shadow: 0 0 30px rgba(0,230,180,0.5); }
+.avatar-frame img, .avatar-frame video { width:100%; height:100%; object-fit:cover; }
+.ring-label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1.5px; margin-top:4px; }
+.ring-score { font-size:36px; font-weight:700; letter-spacing:-1px; }
+.ring-range { font-size:11px; color:var(--muted); }
+
+.chat-trigger {
+  margin-top:8px; padding:8px 20px; border-radius:20px;
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--muted); font-size:12px; cursor:pointer; transition:all .2s;
+  display:flex; align-items:center; gap:6px;
+}
+.chat-trigger:hover { border-color:var(--accent); color:var(--accent); }
+
+.side-icons {
+  position:absolute;
+  top:50%;
+  transform:translateY(-50%);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+}
+.side-icons.left { left: -50px; }
+.side-icons.right { right: -50px; }
+.side-icon {
+  width:40px; height:40px; border-radius:12px;
+  background:var(--surface); border:1px solid var(--border);
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; color:var(--muted); cursor:default;
+}
+.side-icon-label { font-size:9px; color:var(--muted); text-align:center; margin-top:2px; }
+
+.town-card {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:12px 16px; border-bottom:1px solid rgba(30,41,59,0.4);
+  cursor:pointer; transition:background .2s;
+}
+.town-card:last-child { border-bottom:none; }
+.town-card:hover { background:rgba(0,230,180,0.04); }
+.town-info .town-name { font-size:14px; font-weight:600; }
+.town-info .town-count { font-size:22px; font-weight:700; color:var(--accent); }
+.town-info .town-label { font-size:10px; color:var(--muted); }
+.town-badges { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+.badge {
+  display:inline-flex; align-items:center; gap:4px;
+  padding:3px 8px; border-radius:10px; font-size:10px; font-weight:600;
+}
+.badge.updated { background:rgba(0,230,180,0.12); color:var(--accent); }
+.badge.idle { background:rgba(148,163,184,0.12); color:var(--muted); }
+.badge.healthy { color:var(--green); }
+.status-dot { width:5px; height:5px; border-radius:50%; }
+.status-dot.green { background:var(--green); }
+.status-dot.yellow { background:var(--yellow); }
+.status-dot.muted { background:var(--muted); }
+
+.income-row {
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); gap:16px;
+  padding:16px 20px;
+}
+.income-card {
+  display:flex; align-items:center; gap:12px;
+  padding:12px 16px; background:var(--surface2); border-radius:12px;
+}
+.income-icon {
+  width:36px; height:36px; border-radius:10px;
+  display:flex; align-items:center; justify-content:center; font-size:16px;
+}
+.income-icon.green { background:rgba(16,185,129,0.15); color:var(--green); }
+.income-icon.blue { background:rgba(59,130,246,0.15); color:var(--accent2); }
+.income-icon.purple { background:rgba(139,92,246,0.15); color:var(--accent3); }
+.income-detail .income-val { font-size:16px; font-weight:700; }
+.income-detail .income-label { font-size:11px; color:var(--muted); }
+
+.chat-overlay {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5);
+  z-index:1000; align-items:center; justify-content:center;
+  backdrop-filter:blur(4px);
+}
+.chat-overlay.active { display:flex; }
+.chat-panel {
+  width:560px; max-width:95vw; max-height:80vh;
+  background:var(--surface); border:1px solid var(--border); border-radius:20px;
+  display:flex; flex-direction:column; overflow:hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.chat-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:16px 20px; border-bottom:1px solid var(--border);
+}
+.chat-header-left { display:flex; align-items:center; gap:10px; }
+.chat-avatar-sm { width:32px; height:32px; border-radius:50%; overflow:hidden; border:1px solid var(--accent); }
+.chat-avatar-sm img { width:100%; height:100%; object-fit:cover; }
+.chat-header-left h3 { font-size:15px; font-weight:600; }
+.chat-header-left .online { font-size:11px; color:var(--green); }
+.chat-close {
+  width:28px; height:28px; border-radius:8px; border:1px solid var(--border);
+  background:var(--surface2); color:var(--text); cursor:pointer; font-size:16px;
+  display:flex; align-items:center; justify-content:center;
+}
+.chat-close:hover { background:var(--red); border-color:var(--red); }
+.chat-chips {
+  display:flex; gap:6px; padding:10px 20px; overflow-x:auto; border-bottom:1px solid var(--border);
+}
+.chip {
+  flex-shrink:0; padding:6px 14px; border-radius:16px;
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--muted); font-size:12px; cursor:pointer; transition:all .2s; white-space:nowrap;
+}
+.chip:hover { border-color:var(--accent); color:var(--accent); }
+.chat-messages {
+  flex:1; overflow-y:auto; padding:16px 20px;
+  display:flex; flex-direction:column; gap:12px;
+  min-height:200px; max-height:400px;
+}
+.chat-msg {
+  max-width:85%; padding:10px 14px; border-radius:14px;
+  font-size:13px; line-height:1.5;
+}
+.chat-msg.user {
+  align-self:flex-end; background:var(--accent); color:#0a0e17;
+  border-bottom-right-radius:4px;
+}
+.chat-msg.agent {
+  align-self:flex-start; background:var(--surface2);
+  border-bottom-left-radius:4px;
+}
+.chat-msg.agent .typing {
+  display:inline-flex; gap:4px;
+}
+.chat-msg.agent .typing span {
+  width:6px; height:6px; border-radius:50%; background:var(--muted);
+  animation: typing 1.2s infinite;
+}
+.chat-msg.agent .typing span:nth-child(2) { animation-delay:0.2s; }
+.chat-msg.agent .typing span:nth-child(3) { animation-delay:0.4s; }
+@keyframes typing {
+  0%, 60%, 100% { opacity:0.3; transform:translateY(0); }
+  30% { opacity:1; transform:translateY(-4px); }
+}
+.chat-input-area {
+  display:flex; gap:8px; padding:12px 20px; border-top:1px solid var(--border);
+}
+.chat-input {
+  flex:1; padding:10px 16px; border-radius:12px;
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--text); font-size:13px; outline:none;
+}
+.chat-input:focus { border-color:var(--accent); }
+.chat-send {
+  padding:10px 18px; border-radius:12px; border:none;
+  background:var(--accent); color:#0a0e17; font-weight:600;
+  font-size:13px; cursor:pointer; transition:all .2s;
+}
+.chat-send:hover { box-shadow: 0 0 12px rgba(0,230,180,0.4); }
+.chat-send:disabled { opacity:0.4; cursor:not-allowed; }
+
+.modal-overlay {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:900;
+  align-items:center; justify-content:center;
+}
+.modal-overlay.active { display:flex; }
+.modal {
+  background:var(--surface); border:1px solid var(--border); border-radius:20px;
+  width:95vw; max-width:1200px; max-height:90vh; display:flex; flex-direction:column;
+  backdrop-filter:blur(12px);
+}
+.modal-header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:20px 24px; border-bottom:1px solid var(--border);
+}
+.modal-header h2 { font-size:18px; font-weight:600; }
+.modal-close {
+  width:32px; height:32px; border-radius:8px; border:1px solid var(--border);
+  background:var(--surface2); color:var(--text); cursor:pointer; font-size:18px;
+  display:flex; align-items:center; justify-content:center;
+}
+.modal-close:hover { background:var(--red); border-color:var(--red); }
+.modal-toolbar {
+  display:flex; gap:12px; padding:16px 24px; border-bottom:1px solid var(--border);
+  flex-wrap:wrap; align-items:center;
+}
+.filter-input {
+  padding:8px 12px; border-radius:8px; border:1px solid var(--border);
+  background:var(--surface2); color:var(--text); font-size:13px;
+}
+.filter-input:focus { outline:none; border-color:var(--accent); }
+.export-btn {
+  padding:8px 16px; border-radius:8px; border:none;
+  background:var(--accent3); color:#fff; font-size:13px; font-weight:600; cursor:pointer;
+}
+.export-btn:hover { opacity:0.9; }
+.modal-body { flex:1; overflow-y:auto; padding:0; }
+
+table { width:100%; border-collapse:collapse; font-size:13px; }
+thead { position:sticky; top:0; background:var(--surface2); z-index:1; }
+th {
+  text-align:left; padding:12px 16px; font-weight:600; font-size:11px;
+  text-transform:uppercase; letter-spacing:0.5px; color:var(--muted);
+  border-bottom:1px solid var(--border);
+}
+td { padding:12px 16px; border-bottom:1px solid rgba(30,41,59,0.4); }
+tr:hover { background:rgba(0,230,180,0.03); }
+.status-badge {
+  display:inline-block; padding:2px 8px; border-radius:6px; font-size:10px; font-weight:600;
+}
+.status-badge.pending { background:rgba(245,158,11,0.15); color:var(--orange); }
+.status-badge.active { background:rgba(16,185,129,0.15); color:var(--green); }
+
+.pagination {
+  display:flex; align-items:center; justify-content:center; gap:8px;
+  padding:16px 24px; border-top:1px solid var(--border);
+}
+.page-btn {
+  padding:6px 12px; border-radius:8px; border:1px solid var(--border);
+  background:var(--surface2); color:var(--text); cursor:pointer; font-size:13px;
+}
+.page-btn:hover { border-color:var(--accent); }
+.page-btn:disabled { opacity:0.4; cursor:not-allowed; }
+.page-info { font-size:13px; color:var(--muted); }
+
+.filings-view { }
+.filings-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+.filings-header h2 { font-size:18px; font-weight:600; }
+.filings-filters {
+  display:flex; gap:12px; margin-bottom:16px; flex-wrap:wrap;
+}
+.filings-table-wrap {
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;
+}
+
+.summary-cards {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:16px;
+}
+.summary-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px;
+}
+.summary-card h3 { font-size:13px; font-weight:600; margin-bottom:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; }
+.summary-card .metric { font-size:24px; font-weight:700; }
+.summary-card .detail { font-size:13px; color:var(--muted); margin-top:8px; line-height:1.6; }
+
+.defi-section {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:16px;
+}
+.defi-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:20px;
+}
+.defi-card h3 { font-size:13px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:12px; }
+.health-meter { height:8px; background:var(--surface2); border-radius:4px; overflow:hidden; margin-top:8px; }
+.health-meter-fill { height:100%; border-radius:4px; transition:width .3s; }
+
+.empty-state { text-align:center; padding:60px 24px; color:var(--muted); }
+.empty-state h3 { font-size:18px; margin-bottom:8px; color:var(--text); }
+.loading { text-align:center; padding:40px; color:var(--muted); }
+
+.note-input { display:flex; gap:8px; margin-top:12px; }
+.note-input textarea {
+  flex:1; padding:8px 12px; border-radius:8px; border:1px solid var(--border);
+  background:var(--surface2); color:var(--text); font-size:13px; resize:vertical; min-height:60px;
+}
+.note-input button {
+  padding:8px 16px; border-radius:8px; border:none;
+  background:var(--accent); color:#0a0e17; font-size:13px; font-weight:600; cursor:pointer; align-self:flex-end;
+}
+
+@media (max-width:1024px) {
+  .command-center {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+  }
+  .center-panel { order:-1; }
+  .defi-panel { grid-column:1; }
+  .pipeline-panel { grid-column:1; }
+  .income-panel { grid-column:1; }
+}
+@media (max-width:768px) {
+  .main-container { padding:12px; }
+  .health-ring-container { width:220px; height:220px; }
+  .avatar-frame { width:90px; height:90px; }
+  .ring-score { font-size:28px; }
+  .chat-panel { width:100vw; max-width:100vw; border-radius:0; max-height:100vh; }
+  .modal { width:100vw; max-width:100vw; border-radius:0; max-height:100vh; }
+}
+
+.autopilot-overlay {
+  display:none; position:fixed; inset:0; z-index:9999;
+  background:rgba(0,0,0,0.7); backdrop-filter:blur(6px);
+  align-items:center; justify-content:center;
+}
+.autopilot-overlay.visible { display:flex; }
+.autopilot-card {
+  background:var(--surface); border:1px solid var(--accent);
+  border-radius:var(--radius); padding:36px 32px 28px;
+  max-width:440px; width:90%; text-align:center;
+  box-shadow: 0 0 40px rgba(0,230,180,0.15), 0 8px 32px rgba(0,0,0,0.4);
+  animation: apSlideIn 0.3s ease-out;
+}
+@keyframes apSlideIn {
+  from { opacity:0; transform:translateY(24px) scale(0.96); }
+  to { opacity:1; transform:translateY(0) scale(1); }
+}
+.autopilot-card .ap-icon {
+  width:56px; height:56px; margin:0 auto 16px;
+  background:linear-gradient(135deg, var(--accent), var(--accent2));
+  border-radius:50%; display:flex; align-items:center; justify-content:center;
+  font-size:28px;
+}
+.autopilot-card h2 {
+  font-size:20px; font-weight:700; margin-bottom:12px; color:var(--text);
+}
+.autopilot-card h2 span { color:var(--accent); }
+.autopilot-card .ap-body {
+  font-size:14px; color:var(--muted); line-height:1.6; margin-bottom:24px;
+}
+.autopilot-card .ap-features {
+  display:flex; flex-direction:column; gap:8px; margin-bottom:24px; text-align:left;
+}
+.autopilot-card .ap-feat {
+  display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text);
+}
+.autopilot-card .ap-feat .dot {
+  width:6px; height:6px; border-radius:50%; background:var(--accent); flex-shrink:0;
+}
+.autopilot-card .ap-actions { display:flex; gap:12px; justify-content:center; }
+.ap-btn {
+  padding:12px 28px; border-radius:10px; border:none; cursor:pointer;
+  font-size:14px; font-weight:600; transition:all .2s;
+}
+.ap-btn.primary {
+  background:var(--accent); color:#0a0e17;
+}
+.ap-btn.primary:hover { box-shadow: 0 0 20px rgba(0,230,180,0.4); transform:translateY(-1px); }
+.ap-btn.primary:disabled { opacity:0.5; cursor:not-allowed; transform:none; box-shadow:none; }
+.ap-btn.secondary {
+  background:var(--surface2); color:var(--muted); border:1px solid var(--border);
+}
+.ap-btn.secondary:hover { color:var(--text); border-color:var(--text); }
+
+.approval-checklist { margin:10px 0; padding:8px; background:var(--surface2); border-radius:8px; border:1px solid var(--border); }
+.approval-checklist h4 { margin:0 0 8px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:0.5px; }
+.approval-group { margin-bottom:8px; }
+.approval-group-title { font-size:11px; font-weight:600; color:var(--text); margin-bottom:4px; }
+.approval-item { display:flex; align-items:center; gap:6px; font-size:11px; padding:2px 0; color:var(--muted); }
+.approval-item .check { width:14px; height:14px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:9px; flex-shrink:0; }
+.approval-item .check.ok { background:var(--green); color:#000; }
+.approval-item .check.missing { background:var(--red); color:#fff; }
+.approval-item .check.ok::after { content:'\2713'; }
+.approval-item .check.missing::after { content:'\2717'; }
+.approval-item.ok { color:var(--green); }
+.approval-item.missing { color:var(--red); }
+.approval-summary { font-size:11px; color:var(--muted); margin-top:6px; padding-top:6px; border-top:1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-left">
+    <h1><span>REAA</span> Real Estate Agent Assistant</h1>
+  </div>
+  <div class="topbar-right">
+    <div class="network-badge"><span class="dot"></span> Arbitrum Mainnet</div>
+    <button class="wallet-btn connect" id="walletBtn" onclick="connectWallet()">Connect Wallet</button>
+    <button class="wallet-btn" id="disconnectBtn" style="display:none;background:var(--surface2);color:var(--red);border:1px solid var(--red);" onclick="disconnectWallet()">Disconnect</button>
+  </div>
+</div>
+
+<div id="autopilotOverlay" class="autopilot-overlay" onclick="if(event.target===this)closeAutoPilot()">
+  <div class="autopilot-card">
+    <div class="ap-icon">&#9889;</div>
+    <h2>Let <span>REAA</span> Manage Your WBTC Auto-Pilot?</h2>
+    <div class="ap-body">
+      I can automatically supply up to 80% of your WBTC balance to Aave and monitor your safety band. You can revoke this anytime.
+    </div>
+    <div class="ap-features">
+      <div class="ap-feat"><div class="dot"></div> Auto-supply up to 80% of your WBTC to Aave daily</div>
+      <div class="ap-feat"><div class="dot"></div> Continuous health factor monitoring</div>
+      <div class="ap-feat"><div class="dot"></div> Fully revocable at any time</div>
+    </div>
+    <div class="ap-actions">
+      <button class="ap-btn secondary" onclick="closeAutoPilot()">Not now</button>
+      <button class="ap-btn primary" id="apEnableBtn" onclick="enableAutoPilot()">Enable Auto-Pilot</button>
+    </div>
+  </div>
+</div>
+
+<div class="main-container">
+  <div class="nav-tabs">
+    <button class="nav-tab active" data-tab="command" onclick="switchTab('command')">Command Center</button>
+    <button class="nav-tab" data-tab="filings" onclick="switchTab('filings')">Filings</button>
+    <button class="nav-tab" data-tab="analysis" onclick="switchTab('analysis')">Analysis</button>
+    <button class="nav-tab" data-tab="defi" onclick="switchTab('defi')">DeFi</button>
+  </div>
+
+  <div class="tab-content active" id="tab-command">
+    <div class="command-center">
+      <div class="panel defi-panel">
+        <div class="panel-header">
+          <span class="icon">&#9878;</span>
+          <h2>Active Wealth</h2>
+        </div>
+        <div class="panel-body" id="defiPanelBody">
+          <div class="defi-metric">
+            <span class="label">Collateral</span>
+            <span class="val accent" id="defiCollateral">--</span>
+          </div>
+          <div class="defi-metric">
+            <span class="label">Debt</span>
+            <span class="val red" id="defiDebt">--</span>
+          </div>
+          <div class="defi-metric">
+            <span class="label">Health Factor</span>
+            <span class="val green" id="defiHF">--</span>
+          </div>
+          <div class="defi-metric">
+            <span class="label">Net Worth</span>
+            <span class="val accent" id="defiNetWorth">--</span>
+          </div>
+          <div class="defi-metric" id="usdcWalletRow" style="display:none;">
+            <span class="label">USDC Wallet</span>
+            <span class="val green" id="defiUsdcBalance">--</span>
+          </div>
+          <div class="defi-metric" id="defiUpdatedRow" style="display:none;">
+            <span class="label">Last Updated</span>
+            <span class="val" id="defiUpdatedAt" style="font-size:12px;color:var(--muted);">--</span>
+          </div>
+          <div class="defi-actions-title">Recent Actions</div>
+          <div id="defiActions">
+            <div class="defi-action-item"><div class="dot" style="background:var(--muted)"></div> No recent actions</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="center-panel">
+        <div style="font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px;">System Health</div>
+        <div class="health-ring-container" id="healthRing">
+          <svg class="health-ring-svg" viewBox="0 0 280 280">
+            <circle class="ring-bg" cx="140" cy="140" r="120"/>
+            <circle class="ring-glow" id="ringGlow" cx="140" cy="140" r="120"
+              stroke="var(--accent)" stroke-dasharray="754" stroke-dashoffset="754"/>
+            <circle class="ring-fill" id="ringFill" cx="140" cy="140" r="120"
+              stroke="var(--accent)" stroke-dasharray="754" stroke-dashoffset="754"/>
+          </svg>
+          <div class="ring-center">
+            <div class="avatar-frame" id="avatarBtn" onclick="openChat()" title="Chat with REAA">
+              <video src="/static/images/ideilin_reaa.mp4" autoplay loop muted playsinline></video>
+            </div>
+            <div class="ring-label">Safety Rating</div>
+            <div class="ring-score" id="safetyScore">--</div>
+          </div>
+        </div>
+        <button class="chat-trigger" onclick="openChat()">
+          <span>&#128172;</span> Ask REAA
+        </button>
+        <div class="usdc-meter" id="usdcMeter" style="display:none;">
+          <div class="usdc-meter-label">
+            USDC &#8594; WALLET
+            <span id="usdcMeterValue">$0.00 / $0.00</span>
+          </div>
+          <div class="usdc-meter-bar">
+            <div class="usdc-meter-fill" id="usdcMeterFill" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel pipeline-panel">
+        <div class="panel-header">
+          <span class="icon">&#128196;</span>
+          <h2>Lead Pipeline</h2>
+        </div>
+        <div class="panel-body" style="padding:0;" id="pipelineBody">
+          <div class="loading">Connect wallet to view pipeline</div>
+        </div>
+      </div>
+
+      <div class="panel income-panel">
+        <div class="panel-header" style="display:flex;align-items:center;justify-content:space-between;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="icon" style="color:var(--orange);">&#9888;</span>
+            <h2 style="margin:0;">New Opportunities</h2>
+            <span id="alertBadge" style="background:var(--orange);color:#000;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;display:none;">0</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted);">Last 7 days</div>
+        </div>
+        <div id="alertsSummaryRow" class="income-row">
+          <div class="income-card">
+            <div class="income-icon" style="background:var(--orange);color:#000;">!</div>
+            <div class="income-detail">
+              <div class="income-val" id="alertsNewCount">0</div>
+              <div class="income-label">New this week</div>
+            </div>
+          </div>
+          <div class="income-card">
+            <div class="income-icon blue">#</div>
+            <div class="income-detail">
+              <div class="income-val" id="alerts30dCount">0</div>
+              <div class="income-label">Last 30 days</div>
+            </div>
+          </div>
+          <div class="income-card">
+            <div class="income-icon green">&#8721;</div>
+            <div class="income-detail">
+              <div class="income-val" id="alertsAllCount">0</div>
+              <div class="income-label">Total filings</div>
+            </div>
+          </div>
+        </div>
+        <div id="alertsList" style="max-height:180px;overflow-y:auto;padding:0 12px 8px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-filings">
+    <div id="filingsLocked" class="loading" style="padding:60px 20px;text-align:center;color:var(--muted);font-size:15px;">Connect wallet to view filings</div>
+    <div class="filings-view" id="filingsUnlocked" style="display:none;">
+      <div class="filings-header">
+        <h2>All Filings</h2>
+        <div style="display:flex;gap:8px;">
+          <button class="export-btn" onclick="exportFilings('csv')">Download CSV</button>
+          <button class="export-btn" onclick="exportFilings('xlsx')">Download Excel</button>
+        </div>
+      </div>
+      <div class="filings-filters">
+        <select class="filter-input" id="filterTown" onchange="loadFilings()">
+          <option value="">All Towns</option>
+        </select>
+        <input type="date" class="filter-input" id="filterDateFrom" onchange="loadFilings()">
+        <input type="date" class="filter-input" id="filterDateTo" onchange="loadFilings()">
+        <select class="filter-input" id="filterStatus" onchange="loadFilings()">
+          <option value="">All Status</option>
+          <option value="PENDING">Pending</option>
+          <option value="ACTIVE">Active</option>
+          <option value="RESOLVED">Resolved</option>
+        </select>
+      </div>
+      <div class="filings-table-wrap">
+        <div style="overflow-x:auto;">
+          <table id="filingsTable">
+            <thead>
+              <tr>
+                <th>Town</th><th>Address</th><th>Seller</th><th>Lender</th>
+                <th>Filing Date</th><th>Court Case #</th><th>Debt Amount</th>
+                <th>Status</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="filingsBody">
+              <tr><td colspan="9" class="loading">Loading filings...</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pagination" id="paginationBar"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-analysis">
+    <div id="analysisLocked" class="loading" style="padding:60px 20px;text-align:center;color:var(--muted);font-size:15px;">Connect wallet to view analysis</div>
+    <div id="analysisUnlocked" style="display:none;">
+      <div class="summary-cards" id="analysisSummary">
+        <div class="loading">Loading analysis...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tab-content" id="tab-defi">
+    <div id="defiContent">
+      <div class="empty-state" id="defiEmptyState">
+        <h3>Connect Your Wallet</h3>
+        <p>Connect your wallet to view your DeFi position and health metrics.</p>
+      </div>
+      <div id="defiConnectedContent" style="display:none;">
+        <div id="defiStateCards"></div>
+        <div style="margin-top:16px;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);">
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;font-weight:600;">Health Factor Thresholds</div>
+          <div style="font-size:12px;color:var(--muted);margin-bottom:10px;">Optimal HF range: 2.5 - 4.0</div>
+          <div id="hfThresholds" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+            <div class="defi-metric" style="padding:6px 0;"><span class="label">Growth</span><span class="val green" id="hfGrowth">--</span></div>
+            <div class="defi-metric" style="padding:6px 0;"><span class="label">Macro</span><span class="val green" id="hfMacro">--</span></div>
+            <div class="defi-metric" style="padding:6px 0;"><span class="label">Micro</span><span class="val accent" id="hfMicro">--</span></div>
+            <div class="defi-metric" style="padding:6px 0;"><span class="label">Capacity</span><span class="val accent" id="hfCapacity">--</span></div>
+            <div class="defi-metric" style="padding:6px 0;border-bottom:none;"><span class="label">Emergency</span><span class="val red" id="hfEmergency">--</span></div>
+          </div>
+        </div>
+        <div class="delegation-section" id="delegationSection" style="padding-top:14px;border-top:1px solid var(--border);margin-top:16px;">
+          <div class="delegation-title">WBTC Auto-Supply Delegation</div>
+          <div id="delegationContent"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="filingModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="modalTownName">Filing Details</h2>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-toolbar">
+      <input type="date" class="filter-input" id="modalDateFrom" onchange="loadModalFilings()">
+      <input type="date" class="filter-input" id="modalDateTo" onchange="loadModalFilings()">
+      <select class="filter-input" id="modalStatus" onchange="loadModalFilings()">
+        <option value="">All Status</option>
+        <option value="PENDING">Pending</option>
+        <option value="ACTIVE">Active</option>
+        <option value="RESOLVED">Resolved</option>
+      </select>
+      <div style="flex:1;"></div>
+      <button class="export-btn" onclick="exportModalFilings('csv')">CSV</button>
+      <button class="export-btn" onclick="exportModalFilings('xlsx')">Excel</button>
+    </div>
+    <div class="modal-body">
+      <table>
+        <thead>
+          <tr>
+            <th>Address</th><th>Seller</th><th>Lender</th><th>Filing Date</th>
+            <th>Book/Page</th><th>Court Case #</th><th>Debt Amount</th>
+            <th>Return Date</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="modalFilingsBody">
+          <tr><td colspan="9" class="loading">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination" id="modalPagination"></div>
+  </div>
+</div>
+
+<div class="chat-overlay" id="chatOverlay">
+  <div class="chat-panel">
+    <div class="chat-header">
+      <div class="chat-header-left">
+        <div class="chat-avatar-sm"><img src="/static/images/agent_avatar.gif" alt="REAA"></div>
+        <div>
+          <h3>REAA Assistant</h3>
+          <div class="online">Online</div>
+        </div>
+      </div>
+      <button class="chat-close" onclick="closeChat()">&times;</button>
+    </div>
+    <div class="chat-chips">
+      <button class="chip" onclick="sendPreset('Summarize my new Lis Pendens')">Summarize my Lis Pendens</button>
+      <button class="chip" onclick="sendPreset('Explain my safety rating')">Explain my safety rating</button>
+      <button class="chip" onclick="sendPreset('Suggest a DeFi rebalance')">Suggest DeFi rebalance</button>
+    </div>
+    <div class="chat-messages" id="chatMessages">
+      <div class="chat-msg agent">Hi! I'm REAA (Real Estate Agent Assistant), your real estate and DeFi assistant. Ask me about your Lis Pendens leads, safety rating, or DeFi position.</div>
+    </div>
+    <div class="chat-input-area">
+      <input class="chat-input" id="chatInput" placeholder="Ask your assistant..." onkeydown="if(event.key==='Enter')sendMessage()">
+      <button class="chat-send" id="chatSendBtn" onclick="sendMessage()">Send</button>
+    </div>
+  </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+let state = {
+  userId: null,
+  walletAddress: null,
+  authToken: null,
+  towns: [],
+  userTownIds: [],
+  currentModalTownId: null,
+  currentPage: 1,
+  modalPage: 1,
+  autoPilotOffered: false,
+  delegationContractAddress: null,
+  chatHistory: [],
+  chatBusy: false,
+  defiPosition: null,
+  safetyScore: 0,
+};
+
+async function api(path, opts = {}) {
+  const baseHeaders = { 'Content-Type': 'application/json' };
+  if (state.authToken) {
+    baseHeaders['X-Auth-Token'] = state.authToken;
+  }
+  const mergedHeaders = { ...baseHeaders, ...(opts.headers || {}) };
+  const fetchOpts = { ...opts, headers: mergedHeaders };
+  const res = await fetch(path, fetchOpts);
+  if (res.status === 401 && state.authToken) {
+    fullDisconnect();
+    return { error: 'Session expired. Please reconnect your wallet.' };
+  }
+  return res.json();
+}
+
+function fullDisconnect() {
+  if (state._disconnecting) return;
+  state._disconnecting = true;
+  try {
+    try { localStorage.removeItem('reaa_wallet'); } catch(e) {}
+    try { sessionStorage.clear(); } catch(e) {}
+    state.authToken = null;
+    state.userId = null;
+    state.walletAddress = null;
+    state.towns = [];
+    state.chatHistory = [];
+    state.chatBusy = false;
+    state.defiPosition = null;
+    state.safetyScore = 0;
+    state.userTownIds = [];
+    state.autoPilotOffered = false;
+    state.delegationContractAddress = null;
+
+    closeAutoPilot();
+    closeModal();
+    closeChat();
+
+    const apBtn = document.getElementById('apEnableBtn');
+    if (apBtn) { apBtn.disabled = false; apBtn.textContent = 'Enable Auto-Pilot'; }
+
+    const btn = document.getElementById('walletBtn');
+    btn.className = 'wallet-btn connect';
+    btn.textContent = 'Connect Wallet';
+    btn.onclick = connectWallet;
+    document.getElementById('disconnectBtn').style.display = 'none';
+
+    document.getElementById('defiCollateral').textContent = '--';
+    document.getElementById('defiDebt').textContent = '--';
+    document.getElementById('defiHF').textContent = '--';
+    document.getElementById('defiHF').className = 'val green';
+    document.getElementById('defiHF').style.color = '';
+    document.getElementById('defiNetWorth').textContent = '--';
+    document.getElementById('defiActions').innerHTML = '<div class="defi-action-item"><div class="dot" style="background:var(--muted)"></div> No recent actions</div>';
+
+    document.getElementById('delegationSection').style.display = 'none';
+    document.getElementById('delegationContent').innerHTML = '';
+    document.getElementById('defiEmptyState').style.display = '';
+    document.getElementById('defiConnectedContent').style.display = 'none';
+
+    document.getElementById('usdcMeter').style.display = 'none';
+    document.getElementById('usdcMeterValue').textContent = '$0.00 / $0.00';
+    document.getElementById('usdcMeterFill').style.width = '0%';
+    document.getElementById('usdcWalletRow').style.display = 'none';
+    document.getElementById('defiUsdcBalance').textContent = '--';
+
+    updateHealthRing(0);
+
+    document.getElementById('income30d').textContent = '$0.00';
+    document.getElementById('incomeCount').textContent = '0';
+    document.getElementById('incomeChange').textContent = '--';
+    document.getElementById('incomeChange').style.color = '';
+
+    const chatContainer = document.getElementById('chatMessages');
+    chatContainer.innerHTML = '<div class="chat-msg agent">Hi! I\'m REAA (Real Estate Agent Assistant), your real estate and DeFi assistant. Ask me about your Lis Pendens leads, safety rating, or DeFi position.</div>';
+
+    document.getElementById('chatSendBtn').disabled = false;
+
+    document.getElementById('pipelineBody').innerHTML = '<div class="loading">Connect wallet to view pipeline</div>';
+
+    document.getElementById('filingsLocked').style.display = '';
+    document.getElementById('filingsUnlocked').style.display = 'none';
+    document.getElementById('analysisLocked').style.display = '';
+    document.getElementById('analysisUnlocked').style.display = 'none';
+  } finally {
+    state._disconnecting = false;
+  }
+}
+
+async function connectWallet() {
+  if (typeof window.ethereum === 'undefined') {
+    const addr = prompt('Enter your wallet address (0x...):');
+    if (!addr || !addr.startsWith('0x') || addr.length !== 42) {
+      alert('Invalid wallet address');
+      return;
+    }
+    await authenticateWallet(addr);
+    return;
+  }
+  try {
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    if (accounts && accounts.length > 0) {
+      await authenticateWallet(accounts[0]);
+    }
+  } catch (e) {
+    const addr = prompt('MetaMask connection failed. Enter wallet address manually (0x...):');
+    if (addr && addr.startsWith('0x') && addr.length === 42) {
+      await authenticateWallet(addr);
+    }
+  }
+}
+
+async function disconnectWallet() {
+  if (state.authToken) {
+    await api('/api/auth/disconnect', { method: 'POST' });
+  }
+  fullDisconnect();
+}
+
+async function authenticateWallet(address) {
+  const data = await api('/api/auth/wallet', {
+    method: 'POST',
+    body: JSON.stringify({ walletAddress: address }),
+  });
+  if (data.error) { alert('Auth error: ' + data.error); return; }
+  state.userId = data.userId;
+  state.walletAddress = data.walletAddress;
+  state.authToken = data.authToken;
+  state.userTownIds = (data.towns || []).map(t => t.id);
+
+  try {
+    localStorage.setItem('reaa_wallet', JSON.stringify({
+      userId: state.userId,
+      walletAddress: state.walletAddress,
+      authToken: state.authToken,
+      userTownIds: state.userTownIds
+    }));
+  } catch(e) {}
+
+  const btn = document.getElementById('walletBtn');
+  btn.className = 'wallet-btn connected';
+  btn.textContent = address.substring(0, 6) + '...' + address.substring(38);
+  btn.onclick = null;
+  document.getElementById('disconnectBtn').style.display = 'inline-flex';
+
+  document.getElementById('defiCollateral').textContent = 'Loading...';
+  document.getElementById('defiDebt').textContent = 'Loading...';
+  document.getElementById('defiHF').textContent = 'Loading...';
+  document.getElementById('defiHF').className = 'val';
+  document.getElementById('defiHF').style.color = 'var(--muted)';
+  document.getElementById('defiNetWorth').textContent = 'Loading...';
+  document.getElementById('defiActions').innerHTML = '<div class="defi-action-item"><div class="dot" style="background:var(--muted)"></div> Fetching DeFi data...</div>';
+  document.getElementById('safetyScore').textContent = '...';
+  document.getElementById('safetyScore').style.color = 'var(--muted)';
+
+  document.getElementById('filingsLocked').style.display = 'none';
+  document.getElementById('filingsUnlocked').style.display = '';
+  document.getElementById('analysisLocked').style.display = 'none';
+  document.getElementById('analysisUnlocked').style.display = '';
+
+  console.log('[REAA] Auth OK, token set. Loading dashboard data...');
+  try {
+    await Promise.all([
+      loadDefiPanel(),
+      loadIncomeSummary(),
+      loadTowns(),
+      loadDelegationStatus(true),
+      loadUsdcBalance(),
+    ]);
+    console.log('[REAA] All dashboard data loaded successfully');
+  } catch (err) {
+    console.error('[REAA] Initial dashboard load failed:', err);
+  }
+}
+
+function computeSafetyScore(hf, collateral, debt) {
+  if (!hf || hf <= 0) return 0;
+  let score = Math.min(hf, 4.0);
+  if (collateral > 0 && debt > 0) {
+    const ratio = collateral / debt;
+    if (ratio > 5) score = Math.min(score + 0.2, 4.0);
+    else if (ratio < 1.5) score = Math.max(score - 0.3, 0);
+  }
+  return Math.round(score * 100) / 100;
+}
+
+function getSafetyColor(score) {
+  if (score >= 3.0) return 'var(--accent)';
+  if (score >= 2.0) return 'var(--yellow)';
+  return 'var(--red)';
+}
+
+function updateHealthRing(score) {
+  state.safetyScore = score;
+  const pct = Math.min(score / 4.0, 1.0);
+  const circumference = 2 * Math.PI * 120;
+  const offset = circumference * (1 - pct);
+  const color = getSafetyColor(score);
+
+  const fill = document.getElementById('ringFill');
+  const glow = document.getElementById('ringGlow');
+  fill.style.stroke = color;
+  fill.style.strokeDashoffset = offset;
+  glow.style.stroke = color;
+  glow.style.strokeDashoffset = offset;
+
+  document.getElementById('safetyScore').textContent = score > 0 ? score.toFixed(2) : '--';
+  document.getElementById('safetyScore').style.color = color;
+}
+
+async function loadDefiPanel() {
+  if (!state.userId) return;
+  const data = await api('/api/defi/state');
+  const pos = data.position;
+  state.defiPosition = pos;
+
+  if (!pos) {
+    document.getElementById('defiCollateral').textContent = '--';
+    document.getElementById('defiDebt').textContent = '--';
+    document.getElementById('defiHF').textContent = '--';
+    document.getElementById('defiNetWorth').textContent = '--';
+    document.getElementById('defiUpdatedRow').style.display = 'none';
+    document.getElementById('defiUpdatedAt').textContent = '--';
+    document.getElementById('defiActions').innerHTML = '<div class="defi-action-item"><div class="dot" style="background:var(--muted)"></div> ' + (data.message || 'No Aave position detected for this wallet yet.') + '</div>';
+    updateHealthRing(0);
+    return;
+  }
+
+  const hf = parseFloat(pos.health_factor) || 0;
+  const collateral = parseFloat(pos.total_collateral_usd) || 0;
+  const debt = parseFloat(pos.total_debt_usd) || 0;
+  const netWorth = parseFloat(pos.net_worth_usd) || 0;
+
+  document.getElementById('defiCollateral').textContent = '$' + collateral.toFixed(2);
+  document.getElementById('defiDebt').textContent = '$' + debt.toFixed(2);
+  document.getElementById('defiHF').textContent = hf.toFixed(2);
+  document.getElementById('defiNetWorth').textContent = '$' + netWorth.toFixed(2);
+
+  const hfEl = document.getElementById('defiHF');
+  hfEl.className = 'val ' + (hf >= 2 ? 'green' : hf >= 1.5 ? '' : 'red');
+  hfEl.style.color = hf >= 2 ? 'var(--green)' : hf >= 1.5 ? 'var(--orange)' : 'var(--red)';
+
+  if (pos.updated_at) {
+    const updatedRow = document.getElementById('defiUpdatedRow');
+    const updatedEl = document.getElementById('defiUpdatedAt');
+    const dt = new Date(pos.updated_at);
+    const now = new Date();
+    const diffMs = now - dt;
+    const diffMin = Math.floor(diffMs / 60000);
+    let ago;
+    if (diffMin < 1) ago = 'just now';
+    else if (diffMin < 60) ago = diffMin + 'm ago';
+    else if (diffMin < 1440) ago = Math.floor(diffMin / 60) + 'h ago';
+    else ago = Math.floor(diffMin / 1440) + 'd ago';
+    updatedEl.textContent = ago;
+    updatedEl.style.color = diffMin > 30 ? 'var(--orange)' : 'var(--muted)';
+    updatedRow.style.display = '';
+  }
+
+  const score = computeSafetyScore(hf, collateral, debt);
+  updateHealthRing(score);
+
+  if (pos.positions && typeof pos.positions === 'object') {
+    const actionsEl = document.getElementById('defiActions');
+    const assets = Object.entries(pos.positions);
+    if (assets.length > 0) {
+      actionsEl.innerHTML = assets.map(([asset, info]) => {
+        const val = typeof info === 'object' ? (info.balance || info.amount || JSON.stringify(info)) : info;
+        return `<div class="defi-action-item"><div class="dot" style="background:var(--accent)"></div>${asset}: ${val}</div>`;
+      }).join('');
+    }
+  }
+}
+
+async function loadIncomeSummary() {
+  if (!state.userId) return;
+  try {
+    const data = await api('/api/filings/recent');
+    const recentCount = data.recent_count || 0;
+    const total30d = data.total_30d || 0;
+    const allCount = data.all_count || 0;
+    const filings = data.filings || [];
+    const towns = data.towns || [];
+
+    document.getElementById('alertsNewCount').textContent = recentCount;
+    document.getElementById('alerts30dCount').textContent = total30d;
+    document.getElementById('alertsAllCount').textContent = allCount;
+
+    const badge = document.getElementById('alertBadge');
+    if (recentCount > 0) {
+      badge.textContent = recentCount;
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
+
+    const listEl = document.getElementById('alertsList');
+    let warningsHtml = '';
+    const errorStatuses = ['HTTP_403', 'ERROR'];
+    const staleTowns = towns.filter(t => t.lastScrapeStatus && errorStatuses.includes(t.lastScrapeStatus));
+    if (staleTowns.length > 0) {
+      warningsHtml = staleTowns.map(t => {
+        const when = t.lastScrapeAt ? new Date(t.lastScrapeAt).toLocaleString() : 'unknown';
+        return `<div style="padding:4px 8px;margin-bottom:4px;background:rgba(255,165,0,0.1);border-left:3px solid var(--orange);border-radius:4px;font-size:12px;color:var(--orange);">Data may be stale for ${t.townName} (last scrape: ${t.lastScrapeStatus} at ${when})</div>`;
+      }).join('');
+    }
+
+    if (filings.length === 0) {
+      listEl.innerHTML = warningsHtml + '<div style="padding:8px 0;color:var(--muted);font-size:13px;">No new filings in the last 7 days. Run a scrape to refresh data.</div>';
+    } else {
+      listEl.innerHTML = warningsHtml + filings.map(f => {
+        const date = f.recording_date ? new Date(f.recording_date).toLocaleDateString() : 'N/A';
+        const addr = f.property_address || 'Address pending';
+        const town = f.town_name || '';
+        const src = f.source === 'manual' ? ' <span style="color:var(--orange);font-size:10px;">[manual]</span>' : '';
+        const debt = f.debt_amount ? '$' + parseFloat(f.debt_amount).toLocaleString() : '';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:13px;">
+          <div style="width:6px;height:6px;border-radius:50%;background:var(--orange);flex-shrink:0;"></div>
+          <div style="flex:1;min-width:0;">
+            <div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}${src}</div>
+            <div style="color:var(--muted);font-size:11px;">${town} &middot; ${date}${debt ? ' &middot; ' + debt : ''}</div>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  } catch (e) {
+    console.error('loadNewOpportunities error:', e);
+  }
+}
+
+async function loadUsdcBalance() {
+  const meter = document.getElementById('usdcMeter');
+  const walletRow = document.getElementById('usdcWalletRow');
+  if (!state.userId) {
+    meter.style.display = 'none';
+    if (walletRow) walletRow.style.display = 'none';
+    return;
+  }
+  meter.style.display = '';
+  const data = await api('/api/wallet/usdc-balance');
+  const balance = parseFloat(data.balance) || 0;
+  const target = parseFloat(data.target) || 5000;
+  const pct = Math.max(0, Math.min(100, (balance / (target || 1)) * 100));
+  const fmt = (v) => '$' + v.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+  document.getElementById('usdcMeterValue').textContent = fmt(balance) + ' / ' + fmt(target);
+  document.getElementById('usdcMeterFill').style.width = pct + '%';
+
+  if (walletRow) {
+    walletRow.style.display = '';
+    document.getElementById('defiUsdcBalance').textContent = fmt(balance);
+  }
+}
+
+async function loadTowns() {
+  const data = await api('/api/towns');
+  if (data.towns) {
+    state.towns = data.towns;
+    renderPipelineTowns();
+    populateTownFilter();
+  }
+}
+
+function renderPipelineTowns() {
+  const container = document.getElementById('pipelineBody');
+  if (!state.towns.length) {
+    container.innerHTML = '<div class="loading">No towns available</div>';
+    return;
+  }
+  container.innerHTML = state.towns.map(t => {
+    const hasFilings = t.filing_count > 0;
+    const isNew = t.filing_count > 10;
+    return `
+      <div class="town-card" onclick="openTownModal(${t.id}, '${t.name}')">
+        <div class="town-info">
+          <div class="town-name">${t.name}</div>
+          <div class="town-count">${t.filing_count}</div>
+          <div class="town-label">Lis Pendens</div>
+        </div>
+        <div class="town-badges">
+          ${hasFilings ? `<span class="badge updated">${isNew ? 'New' : 'Updated today'}</span>` : '<span class="badge idle">Idle</span>'}
+          <span class="badge"><span class="status-dot ${hasFilings ? 'green' : 'muted'}"></span> ${hasFilings ? 'Healthy' : 'Idle'}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function populateTownFilter() {
+  const sel = document.getElementById('filterTown');
+  sel.innerHTML = '<option value="">All Towns</option>' +
+    state.towns.map(t => `<option value="${t.id}">${t.name} (${t.filing_count})</option>`).join('');
+}
+
+function openTownModal(townId, townName) {
+  state.currentModalTownId = townId;
+  state.modalPage = 1;
+  document.getElementById('modalTownName').textContent = townName + ' - Lis Pendens Filings';
+  document.getElementById('filingModal').classList.add('active');
+  loadModalFilings();
+}
+
+function closeModal() {
+  document.getElementById('filingModal').classList.remove('active');
+  state.currentModalTownId = null;
+}
+
+async function loadModalFilings() {
+  const tbody = document.getElementById('modalFilingsBody');
+  tbody.innerHTML = '<tr><td colspan="9" class="loading">Loading...</td></tr>';
+  let url = `/api/filings?townId=${state.currentModalTownId}&page=${state.modalPage}&perPage=50`;
+  const df = document.getElementById('modalDateFrom').value;
+  const dt = document.getElementById('modalDateTo').value;
+  const st = document.getElementById('modalStatus').value;
+  if (df) url += `&dateFrom=${df}`;
+  if (dt) url += `&dateTo=${dt}`;
+  if (st) url += `&status=${st}`;
+  const data = await api(url);
+  renderModalFilings(data);
+}
+
+function renderModalFilings(data) {
+  const tbody = document.getElementById('modalFilingsBody');
+  if (!data.filings || !data.filings.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted);">No filings found</td></tr>';
+    document.getElementById('modalPagination').innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = data.filings.map(f => `
+    <tr>
+      <td>${f.property_address || '-'}</td>
+      <td>${f.seller || '-'}</td>
+      <td>${f.lender || '-'}</td>
+      <td>${f.recording_date || '-'}</td>
+      <td>${f.book_page || '-'}</td>
+      <td>${f.court_case_number || '-'}</td>
+      <td>${f.debt_amount || '-'}</td>
+      <td>${f.return_date || '-'}</td>
+      <td><span class="status-badge ${(f.status||'pending').toLowerCase()}">${f.status || 'PENDING'}</span></td>
+    </tr>
+  `).join('');
+  renderPagination('modalPagination', data, 'modal');
+}
+
+async function loadFilings() {
+  const tbody = document.getElementById('filingsBody');
+  tbody.innerHTML = '<tr><td colspan="9" class="loading">Loading filings...</td></tr>';
+  let url = `/api/filings?page=${state.currentPage}&perPage=50`;
+  const town = document.getElementById('filterTown').value;
+  const df = document.getElementById('filterDateFrom').value;
+  const dt = document.getElementById('filterDateTo').value;
+  const st = document.getElementById('filterStatus').value;
+  if (town) url += `&townId=${town}`;
+  if (df) url += `&dateFrom=${df}`;
+  if (dt) url += `&dateTo=${dt}`;
+  if (st) url += `&status=${st}`;
+  const data = await api(url);
+  renderFilings(data);
+}
+
+function renderFilings(data) {
+  const tbody = document.getElementById('filingsBody');
+  if (!data.filings || !data.filings.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted);">No filings found.</td></tr>';
+    document.getElementById('paginationBar').innerHTML = '';
+    return;
+  }
+  tbody.innerHTML = data.filings.map(f => `
+    <tr>
+      <td>${f.town_name || '-'}</td>
+      <td>${f.property_address || '-'}</td>
+      <td>${f.seller || '-'}</td>
+      <td>${f.lender || '-'}</td>
+      <td>${f.recording_date || '-'}</td>
+      <td>${f.court_case_number || '-'}</td>
+      <td>${f.debt_amount || '-'}</td>
+      <td><span class="status-badge ${(f.status||'pending').toLowerCase()}">${f.status || 'PENDING'}</span></td>
+      <td><button class="export-btn" style="padding:4px 10px;font-size:11px;" onclick="viewFilingDetail(${f.id})">Notes</button></td>
+    </tr>
+  `).join('');
+  renderPagination('paginationBar', data, 'main');
+}
+
+function renderPagination(containerId, data, type) {
+  const container = document.getElementById(containerId);
+  if (data.pages <= 1) { container.innerHTML = ''; return; }
+  const page = data.page;
+  let html = `<button class="page-btn" ${page <= 1 ? 'disabled' : ''} onclick="goPage(${page-1},'${type}')">Prev</button>`;
+  html += `<span class="page-info">Page ${page} of ${data.pages} (${data.total} total)</span>`;
+  html += `<button class="page-btn" ${page >= data.pages ? 'disabled' : ''} onclick="goPage(${page+1},'${type}')">Next</button>`;
+  container.innerHTML = html;
+}
+
+function goPage(p, type) {
+  if (type === 'modal') { state.modalPage = p; loadModalFilings(); }
+  else { state.currentPage = p; loadFilings(); }
+}
+
+function exportFilings(fmt) {
+  let url = `/api/export/filings?format=${fmt}`;
+  const town = document.getElementById('filterTown').value;
+  const df = document.getElementById('filterDateFrom').value;
+  const dt = document.getElementById('filterDateTo').value;
+  if (town) url += `&townId=${town}`;
+  if (df) url += `&dateFrom=${df}`;
+  if (dt) url += `&dateTo=${dt}`;
+  window.open(url, '_blank');
+}
+
+function exportModalFilings(fmt) {
+  let url = `/api/export/filings?format=${fmt}&townId=${state.currentModalTownId}`;
+  const df = document.getElementById('modalDateFrom').value;
+  const dt = document.getElementById('modalDateTo').value;
+  if (df) url += `&dateFrom=${df}`;
+  if (dt) url += `&dateTo=${dt}`;
+  window.open(url, '_blank');
+}
+
+async function viewFilingDetail(filingId) {
+  const notes = await api(`/api/leads/notes?filingId=${filingId}`);
+  let html = '<div style="padding:20px;">';
+  html += `<h3 style="margin-bottom:12px;">Notes for Filing #${filingId}</h3>`;
+  if (notes.notes && notes.notes.length) {
+    notes.notes.forEach(n => {
+      html += `<div style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:8px;">
+        <div style="font-size:12px;color:var(--muted);">${n.note_type} | ${n.priority} priority | ${n.created_at}</div>
+        <div style="margin-top:4px;">${n.content}</div>
+      </div>`;
+    });
+  } else {
+    html += '<p style="color:var(--muted);">No notes yet.</p>';
+  }
+  if (state.userId) {
+    html += `<div class="note-input">
+      <textarea id="newNote" placeholder="Add a note..."></textarea>
+      <button onclick="addNote(${filingId})">Save</button>
+    </div>`;
+  }
+  html += '</div>';
+  document.getElementById('modalTownName').textContent = 'Filing Notes';
+  document.getElementById('modalFilingsBody').closest('.modal-body').innerHTML = html;
+  document.getElementById('filingModal').classList.add('active');
+}
+
+async function addNote(filingId) {
+  const content = document.getElementById('newNote').value.trim();
+  if (!content) return;
+  await api('/api/leads/notes', {
+    method: 'POST',
+    body: JSON.stringify({ filingId, content, userId: state.userId }),
+  });
+  viewFilingDetail(filingId);
+}
+
+async function loadAnalysis() {
+  const container = document.getElementById('analysisSummary');
+  const [pipeline, leads] = await Promise.all([
+    api('/api/pipeline/status'),
+    api('/api/leads/summary'),
+  ]);
+  let html = '';
+  const run = pipeline.latestRun;
+  if (run) {
+    html += `<div class="summary-card">
+      <h3>Latest Pipeline Run</h3>
+      <div class="metric">${run.filings_found || 0} filings</div>
+      <div class="detail">
+        Status: ${run.status || '-'}<br>
+        Towns scraped: ${run.towns_scraped || 0}<br>
+        Started: ${run.started_at || '-'}<br>
+        ${run.completed_at ? 'Completed: ' + run.completed_at : ''}
+      </div>
+    </div>`;
+  }
+  if (pipeline.townStats) {
+    pipeline.townStats.forEach(ts => {
+      html += `<div class="summary-card">
+        <h3>${ts.town_name}</h3>
+        <div class="metric">${ts.filing_count} filings</div>
+        <div class="detail">Latest filing: ${ts.latest_filing || 'None'}</div>
+      </div>`;
+    });
+  }
+  const s = leads.summary || {};
+  html += `<div class="summary-card">
+    <h3>Lead Analysis</h3>
+    <div class="metric">${s.total_filings || 0} total</div>
+    <div class="detail">
+      High priority: ${s.high_priority || 0}<br>
+      Medium priority: ${s.medium_priority || 0}<br>
+      Filings with notes: ${s.filings_with_notes || 0}
+    </div>
+  </div>`;
+  container.innerHTML = html || '<div class="empty-state"><h3>No data yet</h3></div>';
+}
+
+async function loadHfThresholds() {
+  try {
+    const data = await api('/api/defi/hf-thresholds');
+    const t = data.thresholds || {};
+    document.getElementById('hfGrowth').textContent = (t.growth || 0).toFixed(2);
+    document.getElementById('hfMacro').textContent = (t.macro || 0).toFixed(2);
+    document.getElementById('hfMicro').textContent = (t.micro || 0).toFixed(2);
+    document.getElementById('hfCapacity').textContent = (t.capacity || 0).toFixed(2);
+    document.getElementById('hfEmergency').textContent = (t.emergency || 0).toFixed(2);
+  } catch(e) {}
+}
+
+async function loadDefiState() {
+  if (!state.userId) return;
+  document.getElementById('defiEmptyState').style.display = 'none';
+  document.getElementById('defiConnectedContent').style.display = '';
+  loadHfThresholds();
+  const data = await api('/api/defi/state');
+  const container = document.getElementById('defiStateCards');
+  const pos = data.position;
+  if (!pos) {
+    container.innerHTML = `<div class="defi-section">
+      <div class="defi-card"><h3>Position Status</h3>
+        <div class="metric" style="color:var(--muted)">No Active Position</div>
+        <div class="detail">Your DeFi position will appear here once initialized.</div>
+      </div>
+    </div>`;
+    return;
+  }
+  const hf = parseFloat(pos.health_factor) || 0;
+  const hfColor = hf >= 2 ? 'var(--green)' : hf >= 1.5 ? 'var(--orange)' : 'var(--red)';
+  const hfPct = Math.min(hf / 5 * 100, 100);
+  container.innerHTML = `<div class="defi-section">
+    <div class="defi-card"><h3>Health Factor</h3>
+      <div class="metric" style="color:${hfColor}">${hf.toFixed(2)}</div>
+      <div class="health-meter"><div class="health-meter-fill" style="width:${hfPct}%;background:${hfColor}"></div></div>
+    </div>
+    <div class="defi-card"><h3>Collateral</h3>
+      <div class="metric">$${parseFloat(pos.total_collateral_usd || 0).toFixed(2)}</div>
+    </div>
+    <div class="defi-card"><h3>Debt</h3>
+      <div class="metric" style="color:var(--red)">$${parseFloat(pos.total_debt_usd || 0).toFixed(2)}</div>
+    </div>
+    <div class="defi-card"><h3>Net Worth</h3>
+      <div class="metric" style="color:var(--green)">$${parseFloat(pos.net_worth_usd || 0).toFixed(2)}</div>
+      <div class="detail">Last updated: ${pos.updated_at || '-'}</div>
+    </div>
+  </div>`;
+}
+
+function openChat() {
+  document.getElementById('chatOverlay').classList.add('active');
+  document.getElementById('chatInput').focus();
+}
+
+function closeChat() {
+  document.getElementById('chatOverlay').classList.remove('active');
+}
+
+function sendPreset(msg) {
+  document.getElementById('chatInput').value = msg;
+  sendMessage();
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg || state.chatBusy) return;
+
+  if (!state.userId) {
+    appendChatMsg('agent', 'Please connect your wallet first to use the chat.');
+    return;
+  }
+
+  appendChatMsg('user', msg);
+  state.chatHistory.push({ role: 'user', content: msg });
+  input.value = '';
+  state.chatBusy = true;
+  document.getElementById('chatSendBtn').disabled = true;
+
+  const typingId = appendChatMsg('agent', '<div class="typing"><span></span><span></span><span></span></div>');
+
+  try {
+    const recentHistory = state.chatHistory.slice(-5);
+    const data = await api('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message: msg, history: recentHistory }),
+    });
+
+    removeChatMsg(typingId);
+
+    if (data.error) {
+      appendChatMsg('agent', data.error);
+    } else {
+      appendChatMsg('agent', formatChatResponse(data.response));
+      state.chatHistory.push({ role: 'assistant', content: data.response });
+    }
+  } catch (e) {
+    removeChatMsg(typingId);
+    appendChatMsg('agent', 'Something went wrong. Please try again.');
+  }
+
+  state.chatBusy = false;
+  document.getElementById('chatSendBtn').disabled = false;
+}
+
+function appendChatMsg(role, content) {
+  const container = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  const id = 'msg-' + Date.now() + Math.random().toString(36).substr(2,4);
+  div.id = id;
+  div.className = `chat-msg ${role}`;
+  div.innerHTML = content;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return id;
+}
+
+function removeChatMsg(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+function formatChatResponse(text) {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>')
+    .replace(/`(.*?)`/g, '<code style="background:var(--surface2);padding:1px 4px;border-radius:3px;font-size:12px;">$1</code>');
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.nav-tab[data-tab="${tab}"]`).classList.add('active');
+  document.getElementById(`tab-${tab}`).classList.add('active');
+
+  if (!state.authToken) return;
+  if (tab === 'filings') loadFilings();
+  if (tab === 'analysis') loadAnalysis();
+  if (tab === 'defi') loadDefiState();
+}
+
+async function loadDelegationStatus(afterConnect = false) {
+  if (!state.userId) {
+    document.getElementById('delegationSection').style.display = 'none';
+    document.getElementById('defiEmptyState').style.display = '';
+    document.getElementById('defiConnectedContent').style.display = 'none';
+    return;
+  }
+  document.getElementById('defiEmptyState').style.display = 'none';
+  document.getElementById('defiConnectedContent').style.display = '';
+  const data = await api('/api/user/status');
+  if (data.error) return;
+  const d = data.delegation;
+  if (!d) return;
+
+  state.delegationContractAddress = d.contractAddress || null;
+  state.botWalletAddress = d.botWalletAddress || null;
+
+  const section = document.getElementById('delegationSection');
+  const content = document.getElementById('delegationContent');
+
+  section.style.display = 'block';
+  const deployed = d.contractDeployed;
+  const notDeployedMsg = '<div class="delegation-info" style="color:var(--yellow);">Delegation Manager contract not yet deployed. Auto-supply will activate once the contract is live.</div>';
+
+  if (afterConnect && d.delegationStatus === 'none' && deployed && !state.autoPilotOffered) {
+    state.autoPilotOffered = true;
+    showAutoPilotPrompt();
+  }
+
+  if (d.delegationStatus === 'none') {
+    if (!deployed) {
+      content.innerHTML = `
+        <div class="delegation-info">
+          REAA may auto-supply up to 80% of your WBTC balance to Aave.<br>
+          You can revoke at any time.
+        </div>
+        ${notDeployedMsg}
+        <button class="delegation-btn activate" disabled title="Contract not deployed">Enable WBTC Auto-Supply</button>
+      `;
+    } else {
+      content.innerHTML = `
+        <div class="delegation-info">
+          REAA may auto-supply up to 80% of your WBTC balance to Aave.<br>
+          You can revoke at any time.
+        </div>
+        <button class="delegation-btn activate" onclick="showAutoPilotPrompt()">Enable Auto-Pilot</button>
+      `;
+    }
+  } else if (d.delegationStatus === 'active') {
+    let lastSupplyHtml = '';
+    if (d.lastAutoSupplyAt) {
+      const dt = new Date(d.lastAutoSupplyAt);
+      lastSupplyHtml = `
+        <div class="delegation-detail">
+          <span class="label">Last Supply</span>
+          <span class="val">${d.suppliedWbtcAmount.toFixed(4)} WBTC</span>
+        </div>
+        <div class="delegation-detail">
+          <span class="label">Timestamp</span>
+          <span class="val">${dt.toLocaleString()}</span>
+        </div>
+      `;
+      if (d.lastAutoSupplyTxHash) {
+        lastSupplyHtml += `
+          <div class="delegation-detail">
+            <span class="label">Tx</span>
+            <a class="delegation-tx-link" href="https://arbiscan.io/tx/${d.lastAutoSupplyTxHash}" target="_blank">${d.lastAutoSupplyTxHash.substring(0,10)}...</a>
+          </div>
+        `;
+      }
+    }
+    const stratStatusColor = d.strategyStatus === 'active' ? 'var(--green)' : d.strategyStatus === 'error_permissions' ? 'var(--red)' : 'var(--muted)';
+    const stratStatusLabel = d.strategyStatus === 'active' ? 'FULL AUTOMATION' : d.strategyStatus === 'error_permissions' ? 'PERMISSION ERROR' : 'DISABLED';
+    let strategyHtml = `
+      <div class="delegation-detail">
+        <span class="label">Strategy Engine</span>
+        <span class="val" style="color:${stratStatusColor};">${stratStatusLabel}</span>
+      </div>
+    `;
+    if (d.lastStrategyAction) {
+      strategyHtml += `
+        <div class="delegation-detail">
+          <span class="label">Last Action</span>
+          <span class="val" style="font-size:11px;">${d.lastStrategyAction}</span>
+        </div>
+      `;
+      if (d.lastStrategyTimestamp) {
+        const stratDt = new Date(d.lastStrategyTimestamp);
+        strategyHtml += `
+          <div class="delegation-detail">
+            <span class="label">At</span>
+            <span class="val" style="font-size:11px;">${stratDt.toLocaleString()}</span>
+          </div>
+        `;
+      }
+    }
+    content.innerHTML = `
+      <div class="delegation-status-row">
+        <span class="label" style="font-size:12px;color:var(--muted);">Status</span>
+        <span class="delegation-badge active">Active</span>
+      </div>
+      <div class="delegation-detail">
+        <span class="label">Auto-Pilot</span>
+        <span class="val" style="color:${deployed ? 'var(--green)' : 'var(--yellow)'};">${deployed ? 'ENABLED' : 'PENDING (contract not deployed)'}</span>
+      </div>
+      <div class="delegation-detail">
+        <span class="label">Total Supplied</span>
+        <span class="val">${d.defiPosition && d.defiPosition.totalCollateralUsd > 0 ? '$' + d.defiPosition.totalCollateralUsd.toFixed(2) : '$0.00'}</span>
+      </div>
+      ${strategyHtml}
+      ${d.supplyReconciled ? '<div class="delegation-detail"><span class="label" style="color:var(--yellow);font-size:11px;">Note</span><span class="val" style="color:var(--yellow);font-size:11px;">On-chain position empty — counter resets on next refresh</span></div>' : ''}
+      ${!deployed ? notDeployedMsg : ''}
+      ${lastSupplyHtml}
+      ${d.strategyStatus === 'error_permissions' ? (() => {
+        const layers = d.missingLayers || [];
+        const count = d.missingLayerCount || layers.length;
+        let label = 'Re-authorize Auto-Pilot';
+        let hint = 'Action required: missing on-chain permissions for full automation.';
+        if (count >= 3 || (layers.includes('delegation_flags') && layers.includes('erc20_approval') && layers.includes('aave_credit_delegation'))) {
+          label = 'Authorize Auto-Pilot';
+          hint = 'Action required: all permission layers need to be set up.';
+        } else if (count === 1 && layers.includes('aave_credit_delegation')) {
+          label = 'Complete Authorization (1 signature needed)';
+          hint = 'Action required: credit delegation approval needed for borrowing.';
+        } else if (count === 1) {
+          label = 'Complete Authorization (1 step remaining)';
+        }
+        return `<div style="color:var(--yellow);font-size:11px;margin-bottom:6px;">${hint}</div><button id="apReauthBtn" class="delegation-btn" style="background:var(--green);color:#000;margin-bottom:8px;" onclick="reauthorizeAutoPilot()">${label}</button>`;
+      })() : ''}
+      <div id="approvalChecklist" class="approval-checklist"></div>
+      <button class="delegation-btn revoke" onclick="revokeDelegation()">Revoke Auto-Pilot</button>
+    `;
+    loadApprovalChecklist();
+  } else if (d.delegationStatus === 'revoked') {
+    content.innerHTML = `
+      <div class="delegation-status-row">
+        <span class="label" style="font-size:12px;color:var(--muted);">Status</span>
+        <span class="delegation-badge revoked">Revoked</span>
+      </div>
+      <div class="delegation-info">Auto-pilot was revoked. You can re-enable it at any time.</div>
+      ${!deployed ? notDeployedMsg : ''}
+      <button class="delegation-btn activate" onclick="showAutoPilotPrompt()" ${!deployed ? 'disabled title="Contract not deployed"' : ''}>Re-enable Auto-Pilot</button>
+    `;
+  }
+}
+
+function showAutoPilotPrompt() {
+  document.getElementById('autopilotOverlay').classList.add('visible');
+}
+
+function closeAutoPilot() {
+  document.getElementById('autopilotOverlay').classList.remove('visible');
+}
+
+const ARBITRUM_CHAIN_ID = '0xa4b1';
+const ARBITRUM_CHAIN_CONFIG = {
+  chainId: ARBITRUM_CHAIN_ID,
+  chainName: 'Arbitrum One',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+  blockExplorerUrls: ['https://arbiscan.io'],
+};
+
+function encodeApproveCalldata(spenderAddr, amountHex) {
+  const selector = '0x095ea7b3';
+  const spender = spenderAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  const amount = amountHex.replace('0x', '').padStart(64, '0');
+  return selector + spender + amount;
+}
+
+function encodeDelegationCalldata(amountHex) {
+  const selector = '0x2a8831b8';
+  const amount = amountHex.replace('0x', '').padStart(64, '0');
+  return selector + amount;
+}
+
+function encodeApproveDelegationCalldata(maxSupplyPerTxHex, dailySupplyLimitHex, allowSupply, allowBorrow, allowRepay, allowWithdraw) {
+  const selector = '0x86ed8da1';
+  const param1 = maxSupplyPerTxHex.replace('0x', '').padStart(64, '0');
+  const param2 = dailySupplyLimitHex.replace('0x', '').padStart(64, '0');
+  const boolTrue = '0000000000000000000000000000000000000000000000000000000000000001';
+  const boolFalse = '0000000000000000000000000000000000000000000000000000000000000000';
+  return selector + param1 + param2 +
+    (allowSupply ? boolTrue : boolFalse) +
+    (allowBorrow ? boolTrue : boolFalse) +
+    (allowRepay ? boolTrue : boolFalse) +
+    (allowWithdraw ? boolTrue : boolFalse);
+}
+
+const REQUIRED_TOKENS = {
+  DAI:  '0xDA10009cBd5D07dd0CeCc66161FC93D7c9000da1',
+  WETH: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+  WBTC: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
+  USDC: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  USDT: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+};
+function getRequiredSpenders() {
+  const spenders = { UniswapRouter: '0xE592427A0AEce92De3Edee1F18E0157C05861564' };
+  if (state.delegationContractAddress) {
+    spenders.DelegationManager = state.delegationContractAddress;
+  }
+  if (state.botWalletAddress) {
+    spenders.BotWallet = state.botWalletAddress;
+  }
+  return spenders;
+}
+const MIN_ALLOWANCE_THRESHOLD = BigInt('1000000000000000000');
+
+const VARIABLE_DEBT_TOKENS = {
+  DAI:  '0x8619d80FB0141ba7F184CbF22fd724116D9f7ffC',
+  WETH: '0x0c84331e39d6658Cd6e6b9ba04736cC4c4734351',
+};
+
+function encodeCreditDelegationCalldata(delegateeAddr, amountHex) {
+  const selector = '0xc04a8a10';
+  const delegatee = delegateeAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  const amount = amountHex.replace('0x', '').padStart(64, '0');
+  return selector + delegatee + amount;
+}
+
+async function readBorrowAllowance(walletAddr, debtTokenAddr, delegateeAddr) {
+  const selector = '0x6bd76d24';
+  const fromUser = walletAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  const toUser = delegateeAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  try {
+    const result = await window.ethereum.request({
+      method: 'eth_call',
+      params: [{ to: debtTokenAddr, data: selector + fromUser + toUser }, 'latest'],
+    });
+    return BigInt(result);
+  } catch (e) {
+    console.warn('[AutoPilot] borrowAllowance check failed:', debtTokenAddr, e);
+    return BigInt(0);
+  }
+}
+
+async function signMissingCreditDelegations(walletAddr, delegationManagerAddr, statusCallback) {
+  const MAX_UINT256_HEX = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+  const missing = [];
+  for (const [symbol, debtTokenAddr] of Object.entries(VARIABLE_DEBT_TOKENS)) {
+    try {
+      const allowance = await readBorrowAllowance(walletAddr, debtTokenAddr, delegationManagerAddr);
+      if (allowance === BigInt(0)) {
+        missing.push({ symbol, debtTokenAddr });
+      }
+    } catch (e) {
+      console.warn(`[AutoPilot] Credit delegation check failed for ${symbol}:`, e);
+    }
+  }
+  if (missing.length === 0) {
+    console.log('[AutoPilot] All credit delegations already in place');
+    return { ok: true, signed: 0, total: 0 };
+  }
+  console.log(`[AutoPilot] ${missing.length} missing credit delegations to sign`);
+  let signed = 0;
+  for (const { symbol, debtTokenAddr } of missing) {
+    signed++;
+    if (statusCallback) statusCallback(`Credit delegation for ${symbol} (${signed}/${missing.length})...`);
+    try {
+      const calldata = encodeCreditDelegationCalldata(delegationManagerAddr, MAX_UINT256_HEX);
+      const txHash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: walletAddr, to: debtTokenAddr, data: calldata }],
+      });
+      console.log(`[AutoPilot] ${symbol} credit delegation tx:`, txHash);
+      const receipt = await waitForTxReceipt(txHash, 60000);
+      if (!receipt || receipt.status === '0x0') {
+        console.error(`[AutoPilot] ${symbol} credit delegation tx failed`);
+        return { ok: false, error: `${symbol} credit delegation failed on-chain`, signed, total: missing.length };
+      }
+    } catch (txErr) {
+      if (txErr && txErr.code === 4001) {
+        return { ok: false, error: `You rejected the ${symbol} credit delegation. All credit delegations are needed for borrowing.`, signed: signed - 1, total: missing.length };
+      }
+      console.warn(`[AutoPilot] ${symbol} credit delegation failed (may not be needed):`, txErr.message);
+    }
+  }
+  return { ok: true, signed, total: missing.length };
+}
+
+async function readAllowance(walletAddr, tokenAddr, spenderAddr) {
+  const selector = '0xdd62ed3e';
+  const owner = walletAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  const spender = spenderAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  try {
+    const result = await window.ethereum.request({
+      method: 'eth_call',
+      params: [{ to: tokenAddr, data: selector + owner + spender }, 'latest'],
+    });
+    return BigInt(result);
+  } catch (e) {
+    console.warn('[AutoPilot] allowance check failed:', tokenAddr, spenderAddr, e);
+    return BigInt(0);
+  }
+}
+
+async function signMissingERC20Approvals(walletAddr, delegationManagerAddr, statusCallback) {
+  const MAX_UINT256_HEX = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+  const spenders = getRequiredSpenders();
+  if (!spenders.DelegationManager && delegationManagerAddr) {
+    spenders.DelegationManager = delegationManagerAddr;
+  }
+  const approvals = [];
+  for (const [tokenName, tokenAddr] of Object.entries(REQUIRED_TOKENS)) {
+    for (const [spenderName, spenderAddr] of Object.entries(spenders)) {
+      const allowance = await readAllowance(walletAddr, tokenAddr, spenderAddr);
+      if (allowance < MIN_ALLOWANCE_THRESHOLD) {
+        approvals.push({ tokenName, tokenAddr, spenderName, spenderAddr });
+      }
+    }
+  }
+  if (approvals.length === 0) {
+    console.log('[AutoPilot] All ERC20 approvals already in place');
+    return { ok: true, signed: 0, total: 0 };
+  }
+  console.log(`[AutoPilot] ${approvals.length} missing ERC20 approvals to sign`);
+  let signed = 0;
+  for (const { tokenName, tokenAddr, spenderName, spenderAddr } of approvals) {
+    signed++;
+    if (statusCallback) statusCallback(`Approving ${tokenName} for ${spenderName} (${signed}/${approvals.length})...`);
+    try {
+      const approveData = encodeApproveCalldata(spenderAddr, MAX_UINT256_HEX);
+      const txHash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{ from: walletAddr, to: tokenAddr, data: approveData }],
+      });
+      console.log(`[AutoPilot] ${tokenName}→${spenderName} approve tx:`, txHash);
+      const receipt = await waitForTxReceipt(txHash, 60000);
+      if (!receipt || receipt.status === '0x0') {
+        console.error(`[AutoPilot] ${tokenName}→${spenderName} approval tx failed`);
+        return { ok: false, error: `${tokenName} approval for ${spenderName} failed on-chain`, signed, total: approvals.length };
+      }
+    } catch (txErr) {
+      if (txErr && txErr.code === 4001) {
+        console.error(`[AutoPilot] User rejected ${tokenName}→${spenderName}. Halting sequence.`);
+        return { ok: false, error: `You rejected the ${tokenName} approval for ${spenderName}. Halted remaining approvals.`, signed: signed - 1, total: approvals.length };
+      }
+      console.error(`[AutoPilot] ${tokenName}→${spenderName} approval failed:`, txErr);
+      return { ok: false, error: `${tokenName} approval for ${spenderName} failed: ${txErr.message || 'unknown'}`, signed: signed - 1, total: approvals.length };
+    }
+  }
+  return { ok: true, signed, total: approvals.length };
+}
+
+async function ensureArbitrumChain() {
+  try {
+    const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
+    console.log('[AutoPilot] Current chainId:', currentChainId);
+    if (currentChainId.toLowerCase() === ARBITRUM_CHAIN_ID) {
+      return { ok: true };
+    }
+    console.log('[AutoPilot] Switching to Arbitrum One...');
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: ARBITRUM_CHAIN_ID }],
+      });
+    } catch (switchErr) {
+      if (switchErr.code === 4902) {
+        console.log('[AutoPilot] Arbitrum not found in wallet, adding it...');
+        await window.ethereum.request({
+          method: 'wallet_addEthereumChain',
+          params: [ARBITRUM_CHAIN_CONFIG],
+        });
+      } else if (switchErr.code === 4001) {
+        return { ok: false, reason: 'You rejected the network switch. Please switch to Arbitrum One in your wallet to continue.' };
+      } else {
+        throw switchErr;
+      }
+    }
+    const verifyChainId = await window.ethereum.request({ method: 'eth_chainId' });
+    console.log('[AutoPilot] Post-switch chainId:', verifyChainId);
+    if (verifyChainId.toLowerCase() !== ARBITRUM_CHAIN_ID) {
+      return { ok: false, reason: 'Wallet is still on chain ' + verifyChainId + ' instead of Arbitrum (0xa4b1). Please switch manually.' };
+    }
+    return { ok: true };
+  } catch (e) {
+    console.error('[AutoPilot] Chain switch failed:', e);
+    if (e && e.code === 4001) {
+      return { ok: false, reason: 'You rejected the network switch request.' };
+    }
+    return { ok: false, reason: 'Could not switch to Arbitrum: ' + (e.message || 'unknown error') };
+  }
+}
+
+async function waitForTxReceipt(txHash, maxWaitMs = 120000) {
+  const pollMs = 2500;
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    try {
+      const receipt = await window.ethereum.request({
+        method: 'eth_getTransactionReceipt',
+        params: [txHash],
+      });
+      if (receipt) {
+        return receipt;
+      }
+    } catch (e) {
+      console.warn('[AutoPilot] receipt poll error:', e);
+    }
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  return null;
+}
+
+async function readOnChainAllowance(walletAddr, spenderAddr) {
+  const selector = '0xdd62ed3e';
+  const owner = walletAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  const spender = spenderAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  const data = selector + owner + spender;
+  try {
+    const result = await window.ethereum.request({
+      method: 'eth_call',
+      params: [{ to: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f', data: data }, 'latest'],
+    });
+    const val = BigInt(result);
+    console.log('[AutoPilot] On-chain WBTC allowance:', val.toString());
+    return val;
+  } catch (e) {
+    console.warn('[AutoPilot] Failed to read on-chain allowance:', e);
+    return BigInt(0);
+  }
+}
+
+async function readOnChainDelegation(walletAddr, contractAddr) {
+  const selector = '0x2b293768';
+  const user = walletAddr.toLowerCase().replace('0x', '').padStart(64, '0');
+  const data = selector + user;
+  try {
+    const result = await window.ethereum.request({
+      method: 'eth_call',
+      params: [{ to: contractAddr, data: data }, 'latest'],
+    });
+    if (!result || result === '0x' || result.length < 66) {
+      console.warn('[AutoPilot] getDelegation returned empty/short result:', result);
+      return false;
+    }
+    const isActive = BigInt('0x' + result.slice(2, 66)) !== BigInt(0);
+    console.log('[AutoPilot] On-chain getDelegation isActive:', isActive);
+    return isActive;
+  } catch (e) {
+    console.warn('[AutoPilot] Failed to read on-chain delegation:', e);
+    return false;
+  }
+}
+
+function resetBtn(btn) {
+  btn.disabled = false;
+  btn.textContent = 'Enable Auto-Pilot';
+}
+
+async function loadApprovalChecklist() {
+  const container = document.getElementById('approvalChecklist');
+  if (!container) return;
+  container.innerHTML = '<div style="font-size:11px;color:var(--muted);">Checking on-chain approvals...</div>';
+  const data = await api('/api/delegation/check-permissions');
+  if (data.error) {
+    container.innerHTML = '<div style="font-size:11px;color:var(--red);">Could not load approvals</div>';
+    return;
+  }
+
+  if (!data.delegation_flags && !data.erc20_approvals && !data.credit_delegations) {
+    container.innerHTML = '<div style="font-size:11px;color:var(--muted);">Approval data not available</div>';
+    return;
+  }
+
+  let html = '<h4>Approval Status</h4>';
+
+  const flags = data.delegation_flags || {};
+  const flagNames = { isActive: 'Delegation Active', allowSupply: 'Supply', allowBorrow: 'Borrow', allowRepay: 'Repay', allowWithdraw: 'Withdraw' };
+  html += '<div class="approval-group"><div class="approval-group-title">DM Contract Flags</div>';
+  for (const [key, label] of Object.entries(flagNames)) {
+    const ok = flags[key];
+    html += `<div class="approval-item ${ok ? 'ok' : 'missing'}"><div class="check ${ok ? 'ok' : 'missing'}"></div>${label}</div>`;
+  }
+  html += '</div>';
+
+  const approvals = data.erc20_approvals || [];
+  if (approvals.length > 0) {
+    const grouped = {};
+    approvals.forEach(a => {
+      if (!grouped[a.spender]) grouped[a.spender] = [];
+      grouped[a.spender].push(a);
+    });
+    for (const [spender, items] of Object.entries(grouped)) {
+      html += `<div class="approval-group"><div class="approval-group-title">ERC20 → ${spender}</div>`;
+      items.forEach(a => {
+        const ok = a.status === 'OK';
+        html += `<div class="approval-item ${ok ? 'ok' : 'missing'}"><div class="check ${ok ? 'ok' : 'missing'}"></div>${a.token}</div>`;
+      });
+      html += '</div>';
+    }
+  }
+
+  const credits = data.credit_delegations || [];
+  if (credits.length > 0) {
+    html += '<div class="approval-group"><div class="approval-group-title">Aave Credit Delegation</div>';
+    credits.forEach(c => {
+      const ok = c.status === 'OK';
+      html += `<div class="approval-item ${ok ? 'ok' : 'missing'}"><div class="check ${ok ? 'ok' : 'missing'}"></div>${c.token} Variable Debt</div>`;
+    });
+    html += '</div>';
+  }
+
+  const blockers = data.blockers || [];
+  const okCount = approvals.filter(a => a.status === 'OK').length + credits.filter(c => c.status === 'OK').length + Object.values(flags).filter(Boolean).length;
+  const totalCount = approvals.length + credits.length + Object.keys(flags).length;
+  html += `<div class="approval-summary">${okCount}/${totalCount} approvals granted${blockers.length > 0 ? ' — click Authorize to fix missing' : ' — all set!'}</div>`;
+
+  container.innerHTML = html;
+}
+
+async function enableAutoPilot(isReauthorize = false) {
+  const btn = document.getElementById(isReauthorize ? 'apReauthBtn' : 'apEnableBtn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'Requesting approval...';
+  const actionName = isReauthorize ? 'Re-authorize' : 'Enable';
+  console.log(`[AutoPilot] enableAutoPilot(reauth=${isReauthorize}) called`);
+
+  const MAX_UINT256_HEX = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+  const delegationManagerAddr = state.delegationContractAddress;
+
+  console.log('[AutoPilot] wallet:', state.walletAddress, 'contractAddr:', delegationManagerAddr, 'ethereum:', typeof window.ethereum);
+
+  if (typeof window.ethereum === 'undefined') {
+    resetBtn(btn);
+    appendChatMsg('agent', 'No wallet detected. Please install MetaMask or another Web3 wallet and try again.');
+    return;
+  }
+  if (!state.walletAddress) {
+    resetBtn(btn);
+    appendChatMsg('agent', 'Please connect your wallet first.');
+    return;
+  }
+  if (!delegationManagerAddr) {
+    resetBtn(btn);
+    appendChatMsg('agent', 'Delegation Manager contract address not available yet. Please refresh and try again.');
+    return;
+  }
+
+  try {
+    btn.textContent = 'Switching to Arbitrum...';
+    const chainResult = await ensureArbitrumChain();
+    if (!chainResult.ok) {
+      resetBtn(btn);
+      appendChatMsg('agent', chainResult.reason || 'Could not switch to Arbitrum network. Please switch manually and try again.');
+      return;
+    }
+    console.log('[AutoPilot] On Arbitrum. Proceeding...');
+
+    btn.textContent = 'Step 1/4: Full delegation approval...';
+    console.log('[AutoPilot] Step 1: Calling approveDelegation with all flags true on', delegationManagerAddr);
+    let delegationTxHash;
+    try {
+      const delegationData = encodeApproveDelegationCalldata(
+        MAX_UINT256_HEX, MAX_UINT256_HEX,
+        true, true, true, true
+      );
+      console.log('[AutoPilot] approveDelegation calldata:', delegationData);
+      delegationTxHash = await window.ethereum.request({
+        method: 'eth_sendTransaction',
+        params: [{
+          from: state.walletAddress,
+          to: delegationManagerAddr,
+          data: delegationData,
+        }],
+      });
+      console.log('[AutoPilot] Delegation tx sent:', delegationTxHash);
+    } catch (txErr) {
+      console.warn('[AutoPilot] Delegation tx rejected or failed:', txErr);
+      resetBtn(btn);
+      const reason = (txErr && txErr.code === 4001) ? 'You rejected the delegation approval.' : 'The delegation transaction failed: ' + (txErr.message || 'unknown');
+      appendChatMsg('agent', `${actionName} not completed — ${reason} You can try again anytime.`);
+      return;
+    }
+
+    btn.textContent = 'Confirming delegation...';
+    console.log('[AutoPilot] Waiting for delegation tx receipt...');
+    const delegReceipt = await waitForTxReceipt(delegationTxHash);
+    if (!delegReceipt || delegReceipt.status === '0x0') {
+      console.error('[AutoPilot] Delegation tx failed or timed out. Receipt:', delegReceipt);
+      resetBtn(btn);
+      appendChatMsg('agent', 'The delegation transaction failed on-chain (or timed out). Please try again.');
+      return;
+    }
+    console.log('[AutoPilot] Delegation tx confirmed! Block:', delegReceipt.blockNumber);
+
+    const delegActive = await readOnChainDelegation(state.walletAddress, delegationManagerAddr);
+    console.log('[AutoPilot] On-chain delegation isActive:', delegActive);
+    if (!delegActive) {
+      console.error('[AutoPilot] getDelegation still shows isActive=false after confirmed delegation tx');
+      resetBtn(btn);
+      appendChatMsg('agent', 'The delegation transaction confirmed but the contract still shows inactive. This may be a network delay. Please wait a moment and try again.');
+      return;
+    }
+
+    btn.textContent = 'Step 2/4: Token approvals...';
+    console.log('[AutoPilot] Step 2: Signing ERC20 approvals (up to 15)');
+    const approvalResult = await signMissingERC20Approvals(
+      state.walletAddress,
+      delegationManagerAddr,
+      (statusMsg) => { btn.textContent = 'Step 2/4: ' + statusMsg; }
+    );
+    if (!approvalResult.ok) {
+      resetBtn(btn);
+      appendChatMsg('agent', `Authorization incomplete — ${approvalResult.error}. Delegation is active but token approvals are needed for full automation. Click "${actionName} Auto-Pilot" to continue where you left off.`);
+      return;
+    }
+    if (approvalResult.signed > 0) {
+      console.log(`[AutoPilot] ${approvalResult.signed} ERC20 approvals signed successfully`);
+    }
+
+    btn.textContent = 'Step 3/4: Credit delegation...';
+    console.log('[AutoPilot] Step 3: Signing Aave credit delegations');
+    const creditResult = await signMissingCreditDelegations(
+      state.walletAddress,
+      delegationManagerAddr,
+      (statusMsg) => { btn.textContent = 'Step 3/4: ' + statusMsg; }
+    );
+    if (!creditResult.ok) {
+      resetBtn(btn);
+      appendChatMsg('agent', `Authorization incomplete — ${creditResult.error}. Delegation and token approvals are active, but credit delegation is needed for borrowing. Click "${actionName} Auto-Pilot" to continue where you left off.`);
+      return;
+    }
+    if (creditResult.signed > 0) {
+      console.log(`[AutoPilot] ${creditResult.signed} credit delegations signed successfully`);
+    }
+
+    btn.textContent = 'Step 4/4: Activating...';
+    console.log('[AutoPilot] Step 4: Calling POST /api/delegation/activate');
+    const data = await api('/api/delegation/activate', {
+      method: 'POST',
+      body: JSON.stringify({
+        approve_tx_hash: delegationTxHash,
+        delegation_tx_hash: delegationTxHash,
+        on_chain_verified: true,
+      }),
+    });
+    console.log('[AutoPilot] activate response:', JSON.stringify(data));
+    if (data.error || data.status === 'error') {
+      resetBtn(btn);
+      const errMsg = data.error || data.reason || 'Unknown error';
+      appendChatMsg('agent', `Error activating Auto-Pilot: ${errMsg}. On-chain delegation is active. Please try again.`);
+      return;
+    }
+    closeAutoPilot();
+    resetBtn(btn);
+    state.autoPilotOffered = true;
+    await loadDelegationStatus();
+    console.log('[AutoPilot] delegation activated successfully, UI refreshed');
+    let supplyMsg = '';
+    if (data.supplyResult) {
+      supplyMsg = ' Initial supply: ' + data.supplyResult;
+    } else if (data.status === 'skipped' && data.reason) {
+      supplyMsg = ' Note: ' + data.reason;
+    }
+    const approvalNote = approvalResult.signed > 0 ? ` ${approvalResult.signed} token approvals signed.` : '';
+    appendChatMsg('agent', `Auto-Pilot ${isReauthorize ? 're-authorized' : 'enabled'} with full permissions! Delegation and${approvalNote} all confirmed on Arbitrum. Strategies (Growth, Capacity, Macro, Micro) are now active. You can revoke anytime.${supplyMsg}`);
+  } catch (e) {
+    console.error('[AutoPilot] Unexpected error:', e);
+    resetBtn(btn);
+    appendChatMsg('agent', `Error during ${actionName}: unexpected issue (${e.message || 'unknown'}). Please try again.`);
+  }
+}
+
+async function reauthorizeAutoPilot() {
+  const btn = document.getElementById('apReauthBtn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = 'Checking permissions...';
+
+  const delegationManagerAddr = state.delegationContractAddress;
+  if (typeof window.ethereum === 'undefined') {
+    btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+    appendChatMsg('agent', 'No wallet detected. Please install MetaMask or another Web3 wallet.');
+    return;
+  }
+  if (!state.walletAddress || !delegationManagerAddr) {
+    btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+    appendChatMsg('agent', 'Wallet or contract address not available. Please refresh.');
+    return;
+  }
+
+  try {
+    const chainResult = await ensureArbitrumChain();
+    if (!chainResult.ok) {
+      btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+      appendChatMsg('agent', chainResult.reason || 'Could not switch to Arbitrum.');
+      return;
+    }
+
+    const MAX_UINT256_HEX = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff';
+    let stepsDone = [];
+
+    btn.textContent = 'Pre-flight: checking DM flags...';
+    const dmActive = await readOnChainDelegation(state.walletAddress, delegationManagerAddr);
+    const needDmFlags = !dmActive;
+
+    btn.textContent = 'Pre-flight: checking ERC20 approvals...';
+    const reAuthSpenders = getRequiredSpenders();
+    if (!reAuthSpenders.DelegationManager && delegationManagerAddr) {
+      reAuthSpenders.DelegationManager = delegationManagerAddr;
+    }
+    let missingErc20 = 0;
+    for (const [tokenName, tokenAddr] of Object.entries(REQUIRED_TOKENS)) {
+      for (const [, spenderAddr] of Object.entries(reAuthSpenders)) {
+        const a = await readAllowance(state.walletAddress, tokenAddr, spenderAddr);
+        if (a < MIN_ALLOWANCE_THRESHOLD) missingErc20++;
+      }
+    }
+
+    btn.textContent = 'Pre-flight: checking credit delegations...';
+    let missingCredit = 0;
+    for (const [symbol, debtTokenAddr] of Object.entries(VARIABLE_DEBT_TOKENS)) {
+      try {
+        const allowance = await readBorrowAllowance(state.walletAddress, debtTokenAddr, delegationManagerAddr);
+        if (allowance === BigInt(0)) missingCredit++;
+      } catch (e) {
+        console.warn(`[ReAuth] Credit check failed for ${symbol}:`, e);
+      }
+    }
+
+    const sigCount = (needDmFlags ? 1 : 0) + missingErc20 + missingCredit;
+    console.log(`[ReAuth] Pre-flight: dmFlags=${needDmFlags}, erc20Missing=${missingErc20}, creditMissing=${missingCredit}, totalSigs=${sigCount}`);
+
+    if (sigCount === 0) {
+      btn.textContent = 'Syncing status...';
+      await api('/api/delegation/check-permissions', { method: 'POST' });
+      await loadDelegationStatus();
+      btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+      appendChatMsg('agent', 'All permissions already in place. Status synced — strategies are active.');
+      return;
+    }
+
+    let stepLabel = 0;
+    const nextStep = (detail) => {
+      stepLabel++;
+      btn.textContent = `Step ${stepLabel}: ${detail}`;
+    };
+
+    if (needDmFlags) {
+      nextStep('DM delegation flags...');
+      try {
+        const delegationData = encodeApproveDelegationCalldata(MAX_UINT256_HEX, MAX_UINT256_HEX, true, true, true, true);
+        const txHash = await window.ethereum.request({
+          method: 'eth_sendTransaction',
+          params: [{ from: state.walletAddress, to: delegationManagerAddr, data: delegationData }],
+        });
+        const receipt = await waitForTxReceipt(txHash);
+        if (!receipt || receipt.status === '0x0') {
+          btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+          appendChatMsg('agent', 'DM delegation transaction failed on-chain. Please try again.');
+          return;
+        }
+        stepsDone.push('DM flags');
+      } catch (txErr) {
+        btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+        const reason = (txErr && txErr.code === 4001) ? 'You rejected the delegation approval.' : 'Delegation transaction failed: ' + (txErr.message || 'unknown');
+        appendChatMsg('agent', `Re-authorization stopped — ${reason}`);
+        return;
+      }
+    }
+
+    if (missingErc20 > 0) {
+      nextStep('ERC20 token approvals...');
+      const approvalResult = await signMissingERC20Approvals(
+        state.walletAddress, delegationManagerAddr,
+        (msg) => { btn.textContent = msg; }
+      );
+      if (!approvalResult.ok) {
+        btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+        appendChatMsg('agent', `Re-authorization incomplete — ${approvalResult.error}. Click Re-authorize to continue where you left off.`);
+        return;
+      }
+      if (approvalResult.signed > 0) stepsDone.push(`${approvalResult.signed} ERC20 approvals`);
+    }
+
+    if (missingCredit > 0) {
+      nextStep('Credit delegation approvals...');
+      const creditResult = await signMissingCreditDelegations(
+        state.walletAddress, delegationManagerAddr,
+        (msg) => { btn.textContent = msg; }
+      );
+      if (!creditResult.ok) {
+        btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+        appendChatMsg('agent', `Re-authorization incomplete — ${creditResult.error}. Click Re-authorize to continue where you left off.`);
+        return;
+      }
+      if (creditResult.signed > 0) stepsDone.push(`${creditResult.signed} credit delegations`);
+    }
+
+    btn.textContent = 'Syncing status...';
+    await api('/api/delegation/check-permissions', { method: 'POST' });
+    await loadDelegationStatus();
+    btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+    appendChatMsg('agent', `Re-authorization complete! Signed: ${stepsDone.join(', ')}. All strategies are now active.`);
+  } catch (e) {
+    console.error('[ReAuth] Unexpected error:', e);
+    btn.disabled = false; btn.textContent = 'Re-authorize Auto-Pilot';
+    appendChatMsg('agent', `Unexpected error: ${e.message || 'unknown'}. Please try again.`);
+  }
+}
+
+async function revokeDelegation() {
+  if (!confirm('Revoke Auto-Pilot?\n\nREAA will stop auto-supplying your WBTC to Aave.')) return;
+  const btn = document.querySelector('.delegation-btn.revoke');
+  if (btn) { btn.disabled = true; btn.textContent = 'Revoking...'; }
+  const data = await api('/api/delegation/revoke', { method: 'POST' });
+  if (data.error) { alert('Error: ' + data.error); if (btn) { btn.disabled = false; btn.textContent = 'Revoke Auto-Pilot'; } return; }
+  loadDelegationStatus();
+  appendChatMsg('agent', 'Auto-pilot has been revoked. REAA will no longer auto-supply your WBTC to Aave.');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('pipelineBody').innerHTML = '<div class="loading">Connect wallet to view pipeline</div>';
+  updateHealthRing(0);
+
+  try {
+    const saved = localStorage.getItem('reaa_wallet');
+    if (saved) {
+      const w = JSON.parse(saved);
+      if (w.authToken && w.walletAddress) {
+        state.userId = w.userId;
+        state.walletAddress = w.walletAddress;
+        state.authToken = w.authToken;
+        state.userTownIds = w.userTownIds || [];
+
+        const btn = document.getElementById('walletBtn');
+        btn.className = 'wallet-btn connected';
+        btn.textContent = w.walletAddress.substring(0, 6) + '...' + w.walletAddress.substring(38);
+        btn.onclick = null;
+        document.getElementById('disconnectBtn').style.display = 'inline-flex';
+
+        document.getElementById('filingsLocked').style.display = 'none';
+        document.getElementById('filingsUnlocked').style.display = '';
+        document.getElementById('analysisLocked').style.display = 'none';
+        document.getElementById('analysisUnlocked').style.display = '';
+
+        console.log('[REAA] Auto-reconnect: token found, loading dashboard...');
+        Promise.all([
+          loadDefiPanel(),
+          loadIncomeSummary(),
+          loadTowns(),
+          loadDelegationStatus(true),
+          loadUsdcBalance(),
+        ]).then(() => {
+          console.log('[REAA] Auto-reconnect: all data loaded');
+        }).catch(err => {
+          console.error('[REAA] Auto-reconnect load failed:', err);
+        });
+      }
+    }
+  } catch(e) {}
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeModal(); closeChat(); closeAutoPilot(); }
+});
+</script>
+</body>
+</html>

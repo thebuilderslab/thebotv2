@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>PROJECT 87 — OVERSEER</title>
+  <link rel="stylesheet" href="/static/overseer.css?v=5">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js" type="application/javascript"></script>
+  <script nonce="{{ csp_nonce }}">
+  var CONTRACTS = {
+    WBTC: '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
+    USDC: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    USDT: '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+    DAI_DEBT: '0x8619d80FB0141ba7F184CbF22fd724116D9f7ffC',
+    WETH_DEBT: '0x0c84331e39d6658Cd6e6b9ba04736cC4c4734351',
+    DM: '{{ delegation_manager_address | default("") }}',
+    VAULT: '{{ openclaw_vault_address | default("") }}',
+    BOT_WALLET: '{{ bot_wallet_address | default("") }}'
+  };
+  </script>
+</head>
+<body class="overseer--awaiting-wallet">
+
+<!-- Top status strip -->
+<div id="top-strip">
+  <span id="strip-hf" class="strip-hf-tile"><span id="strip-hf-dot" class="strip-dot critical"></span>HF: —</span>
+  <span id="strip-eth">ETH: —</span>
+  <span id="strip-countdown">T-MINUS: ----</span>
+  <select id="wallet-selector" title="Select wallet"></select>
+  <span id="strip-status">AWAITING CONNECT</span>
+  <span id="strip-wallet-badge" class="strip-wallet-badge" title="Open wallet connection">NO WALLET</span>
+</div>
+
+<!-- Stale data banner -->
+<div id="stale-banner">AWAITING DATA — LAST UPDATE EXCEEDED 120s</div>
+
+<!-- ── Connection modal ──────────────────────────────────────────────────── -->
+<div id="connect-modal" class="connect-modal visible">
+  <div class="connect-modal-box">
+
+    <div class="cm-title">PROJECT 87</div>
+    <div class="cm-subtitle">OVERSEER ACCESS REQUIRED</div>
+
+    <!-- Phase 1: Connect wallet -->
+    <div id="cm-connect-phase">
+      <button id="cm-connect-btn" class="cm-btn">[ INITIALIZE CONNECTION ]</button>
+      <div id="cm-connect-status" class="cm-status"></div>
+      <div id="cm-mobile-options">
+        <div class="cm-install-heading">NO INJECTED WALLET — OPEN IN A WEB3 BROWSER:</div>
+        <a class="cm-btn cm-install-btn" id="cm-mm-deeplink">[ OPEN IN METAMASK ]</a>
+        <a class="cm-btn cm-install-btn" id="cm-cb-deeplink">[ OPEN IN COINBASE WALLET ]</a>
+      </div>
+    </div>
+
+    <!-- Phase 2: Sequential Signer (pre-activation) -->
+    <div id="cm-signer-phase" style="display:none;">
+      <div class="cm-phase-title">SEQUENTIAL SIGNER — 5-STEP ACTIVATION</div>
+
+      <div class="cm-wbtc-balance">
+        WBTC BALANCE: <span class="val" id="cm-wbtc-bal">SCANNING...</span>
+      </div>
+
+      <div class="cm-progress-wrap">
+        <div class="cm-progress-fill" id="cm-progress-fill"></div>
+      </div>
+      <div class="cm-progress-label" id="cm-progress-label">AWAITING INITIATION</div>
+
+      <div id="cm-step-container">
+        <div class="cm-step-row" id="cm-stepRow1">
+          <div class="cm-step-num">1</div>
+          <div class="cm-step-body">
+            <div class="cm-step-title">APPROVE WBTC</div>
+            <div class="cm-step-status" id="cm-step1Status">PENDING</div>
+            <div class="cm-step-tx" id="cm-step1Tx"></div>
+          </div>
+        </div>
+        <div class="cm-step-row" id="cm-stepRow2">
+          <div class="cm-step-num">2</div>
+          <div class="cm-step-body">
+            <div class="cm-step-title">SET STRATEGY LIMITS</div>
+            <div class="cm-step-status" id="cm-step2Status">PENDING</div>
+            <div class="cm-step-tx" id="cm-step2Tx"></div>
+          </div>
+        </div>
+        <div class="cm-step-row" id="cm-stepRow3">
+          <div class="cm-step-num">3</div>
+          <div class="cm-step-body">
+            <div class="cm-step-title">GASLESS CREDIT DELEGATION</div>
+            <div class="cm-step-status" id="cm-step3Status">PENDING</div>
+            <div class="cm-step-tx" id="cm-step3Tx"></div>
+          </div>
+        </div>
+        <div class="cm-step-row" id="cm-stepRow4">
+          <div class="cm-step-num">4</div>
+          <div class="cm-step-body">
+            <div class="cm-step-title">APPROVE USDC ROUTING</div>
+            <div class="cm-step-status" id="cm-step4Status">PENDING</div>
+            <div class="cm-step-tx" id="cm-step4Tx"></div>
+          </div>
+        </div>
+        <div class="cm-step-row" id="cm-stepRow5">
+          <div class="cm-step-num">5</div>
+          <div class="cm-step-body">
+            <div class="cm-step-title">APPROVE USDT SHORT CLOSE</div>
+            <div class="cm-step-status" id="cm-step5Status">PENDING</div>
+            <div class="cm-step-tx" id="cm-step5Tx"></div>
+          </div>
+        </div>
+      </div>
+
+      <button id="cm-activate-btn" class="cm-btn">[ BEGIN ACTIVATION ]</button>
+      <div id="cm-activation-status" class="cm-status"></div>
+    </div>
+
+    <!-- Phase 3: Activated — launch -->
+    <div id="cm-activated-phase" style="display:none;">
+      <div class="cm-phase-title ok">AUTHORIZATION ACTIVE</div>
+      <div id="cm-wallet-display" class="cm-wallet-addr"></div>
+      <div id="cm-delegation-status" class="cm-status"></div>
+      <button id="cm-resign-btn" class="cm-btn cm-btn--amber" style="display:none;">[ RE-SIGN CREDIT DELEGATION ]</button>
+      <div id="cm-resign-status" class="cm-status"></div>
+      <button id="cm-close-btn" class="cm-btn cm-btn--green">[ LAUNCH OVERSEER ]</button>
+    </div>
+
+    <!-- Footer: always visible -->
+    <div class="cm-footer">
+      <button id="cm-eject-btn" class="cm-btn cm-btn--red cm-btn--small">[ EJECT ]</button>
+      <button id="cm-hard-reset-btn" class="cm-btn cm-btn--red cm-btn--small" style="opacity:0.55;">[ HARD RESET ]</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── 5-dome horizontal scroll ──────────────────────────────────────────── -->
+<div id="dome-scroll" class="dome-scroll--hidden">
+
+  <!-- ══ OPS: Safety Dome ════════════════════════════════════════════════════ -->
+  <section class="dome-section ops" id="dome-ops">
+    <div class="dome-shell" id="d1-shell">
+
+      <!-- City illustration -->
+      <div class="dome-city">
+        <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <ellipse cx="100" cy="110" rx="90" ry="16" fill="rgba(80,120,60,0.30)"/>
+          <line x1="100" y1="94" x2="100" y2="115" stroke="rgba(200,180,120,0.18)" stroke-width="4"/>
+          <line x1="25" y1="105" x2="175" y2="105" stroke="rgba(200,180,120,0.18)" stroke-width="4"/>
+          <rect x="88" y="30" width="24" height="75" fill="rgba(200,140,70,0.70)" rx="2"/>
+          <rect x="82" y="25" width="36" height="10" fill="rgba(220,160,80,0.75)" rx="2"/>
+          <rect x="95" y="18" width="10" height="12" fill="rgba(200,140,70,0.70)" rx="1"/>
+          <circle cx="100" cy="16" r="4" fill="rgba(255,220,80,0.92)"/>
+          <circle cx="100" cy="16" r="7" fill="rgba(255,220,80,0.20)"/>
+          <rect x="30" y="70" width="6" height="36" fill="rgba(180,120,60,0.65)" rx="1"/>
+          <path d="M18,68 Q33,55 48,68" fill="rgba(160,110,55,0.60)" stroke="rgba(200,140,70,0.50)" stroke-width="1"/>
+          <rect x="40" y="80" width="22" height="26" fill="rgba(180,120,60,0.60)" rx="2"/>
+          <rect x="42" y="76" width="18" height="6" fill="rgba(200,140,70,0.55)" rx="1"/>
+          <rect x="138" y="72" width="30" height="34" fill="rgba(180,120,60,0.60)" rx="2"/>
+          <rect x="140" y="67" width="26" height="8" fill="rgba(200,140,70,0.55)" rx="1"/>
+          <rect x="152" y="50" width="3" height="18" fill="rgba(200,160,90,0.65)"/>
+          <line x1="148" y1="52" x2="158" y2="52" stroke="rgba(200,160,90,0.50)" stroke-width="1"/>
+          <rect x="92" y="40" width="5" height="4" fill="rgba(255,230,120,0.50)" rx="0.5"/>
+          <rect x="102" y="40" width="5" height="4" fill="rgba(255,230,120,0.50)" rx="0.5"/>
+          <rect x="92" y="52" width="5" height="4" fill="rgba(255,230,120,0.40)" rx="0.5"/>
+          <rect x="102" y="52" width="5" height="4" fill="rgba(255,230,120,0.40)" rx="0.5"/>
+          <line x1="62" y1="105" x2="88" y2="105" stroke="rgba(180,130,60,0.30)" stroke-width="3"/>
+          <line x1="112" y1="105" x2="138" y2="105" stroke="rgba(180,130,60,0.30)" stroke-width="3"/>
+        </svg>
+      </div>
+
+      <!-- Rib rings -->
+      <div class="rib-ring" style="inset:12%;"></div>
+      <div class="rib-ring" style="inset:22%;"></div>
+      <div class="rib-ring" style="inset:34%;"></div>
+      <div class="rib-ring" style="inset:46%;"></div>
+
+      <!-- Base collar -->
+      <div class="dome-collar"></div>
+
+      <!-- SVG status ring -->
+      <svg class="hf-ring" viewBox="0 0 200 200" aria-hidden="true">
+        <circle class="hf-ring-track" cx="100" cy="100" r="90"/>
+        <circle id="d1-ring-fill" class="hf-ring-fill"
+          cx="100" cy="100" r="90"
+          stroke-dasharray="565.5"
+          stroke-dashoffset="565.5"
+          transform="rotate(-90 100 100)"/>
+      </svg>
+
+      <span class="dome-label">OPS · SAFETY</span>
+      <span id="d1-strategy-badge" class="strategy-badge">IDLE</span>
+
+      <div id="d1-hf" class="dome-primary">--</div>
+      <div id="d1-collateral" class="dome-secondary">$-- / $--</div>
+
+      <div id="d1-shield" class="shield-indicator down">
+        <svg viewBox="0 0 16 20" aria-hidden="true">
+          <path d="M8 0L0 4v6c0 5.5 3.4 10.6 8 12 4.6-1.4 8-6.5 8-12V4L8 0z"/>
+        </svg>
+        <span class="shield-text">SHIELD: DOWN</span>
+      </div>
+
+    </div>
+
+    <!-- USDC re-approval repair banner (shown when bot lacks USDC allowance) -->
+    <div id="usdc-repair-banner" class="usdc-repair-banner" style="display:none">
+      <span class="usdc-repair-icon">&#9888;</span>
+      <span class="usdc-repair-msg">USDC ROUTING APPROVAL NEEDED — repay engine blocked</span>
+      <button id="usdc-repair-btn" class="usdc-repair-btn">RE-APPROVE NOW</button>
+    </div>
+
+  </section>
+
+  <!-- ══ INFRA: Operator Bay ═════════════════════════════════════════════════ -->
+  <section class="dome-section infra" id="dome-infra">
+    <div class="dome-shell">
+
+      <!-- City illustration -->
+      <div class="dome-city">
+        <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <ellipse cx="100" cy="110" rx="90" ry="16" fill="rgba(40,70,100,0.30)"/>
+          <line x1="10" y1="100" x2="190" y2="100" stroke="rgba(80,140,200,0.22)" stroke-width="5"/>
+          <line x1="100" y1="80" x2="100" y2="115" stroke="rgba(80,140,200,0.22)" stroke-width="5"/>
+          <rect x="82" y="42" width="36" height="64" fill="rgba(70,110,160,0.70)" rx="3"/>
+          <ellipse cx="100" cy="42" rx="18" ry="6" fill="rgba(90,140,200,0.75)"/>
+          <rect x="86" y="26" width="28" height="18" fill="rgba(80,120,180,0.70)" rx="2"/>
+          <rect x="34" y="60" width="20" height="46" fill="rgba(60,90,140,0.65)" rx="2"/>
+          <ellipse cx="44" cy="60" rx="10" ry="4" fill="rgba(80,120,180,0.70)"/>
+          <path d="M38,58 Q44,50 50,58" fill="rgba(200,220,255,0.10)"/>
+          <rect x="48" y="66" width="16" height="40" fill="rgba(60,90,140,0.55)" rx="2"/>
+          <ellipse cx="56" cy="66" rx="8" ry="3" fill="rgba(80,120,180,0.60)"/>
+          <rect x="136" y="58" width="32" height="48" fill="rgba(200,100,40,0.55)" rx="3"/>
+          <ellipse cx="152" cy="58" rx="16" ry="6" fill="rgba(220,120,50,0.65)"/>
+          <rect x="156" y="74" width="28" height="32" fill="rgba(60,90,140,0.55)" rx="2"/>
+          <circle cx="100" cy="100" r="5" fill="rgba(80,140,200,0.45)"/>
+          <circle cx="44" cy="100" r="4" fill="rgba(80,140,200,0.35)"/>
+          <circle cx="152" cy="100" r="4" fill="rgba(80,140,200,0.35)"/>
+          <circle cx="100" cy="22" r="4" fill="rgba(255,140,40,0.90)"/>
+          <circle cx="100" cy="22" r="8" fill="rgba(255,140,40,0.20)"/>
+          <circle cx="44" cy="56" r="3" fill="rgba(255,80,0,0.80)"/>
+        </svg>
+      </div>
+
+      <div class="rib-ring" style="inset:12%;"></div>
+      <div class="rib-ring" style="inset:24%;"></div>
+      <div class="dome-collar"></div>
+
+      <span class="dome-label">INFRA · OPERATOR</span>
+
+      <div class="fuel-gauge-wrap">
+        <svg width="140" height="80" viewBox="0 0 140 80" aria-hidden="true">
+          <path d="M10,70 A60,60 0 0,1 130,70" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="8" stroke-linecap="round"/>
+          <path id="d5-gauge-arc" d="M10,70 A60,60 0 0,1 130,70" fill="none"
+            stroke="#00ff88" stroke-width="8" stroke-linecap="round"
+            stroke-dasharray="188" stroke-dashoffset="188"
+            style="transition:stroke-dashoffset 0.4s ease-in-out, stroke 0.4s;"/>
+          <g id="d5-gauge-pointer" transform="rotate(0 70 70)" style="transform-origin:70px 70px;transition:transform 0.4s ease-in-out;">
+            <line x1="70" y1="70" x2="70" y2="22" stroke="rgba(255,255,255,0.6)" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="70" cy="70" r="4" fill="rgba(255,255,255,0.3)"/>
+          </g>
+          <text x="6" y="78" fill="rgba(255,255,255,0.3)" font-size="8" font-family="monospace">0</text>
+          <text x="67" y="18" fill="rgba(255,255,255,0.3)" font-size="8" font-family="monospace" text-anchor="middle">1×</text>
+          <text x="126" y="78" fill="rgba(255,255,255,0.3)" font-size="8" font-family="monospace">2×</text>
+        </svg>
+      </div>
+
+      <div id="d5-eth-balance" class="dome-primary" style="font-size:clamp(1.4rem,6vw,2rem)">-- ETH</div>
+      <div id="d5-gauge-status" class="gauge-status ok">FUEL: --</div>
+      <div id="d5-nurse-row" class="nurse-row">Last sweep: --</div>
+      <div class="nurse-row" style="color:rgba(224,240,255,0.2);font-size:0.55rem;margin-top:8px;">
+        Operator holds own Aave position — separate from user strategies
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══ ECON: USDC Reactor ══════════════════════════════════════════════════ -->
+  <section class="dome-section econ" id="dome-econ">
+    <div class="dome-shell">
+
+      <!-- City illustration -->
+      <div class="dome-city">
+        <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <ellipse cx="100" cy="110" rx="90" ry="16" fill="rgba(0,100,140,0.25)"/>
+          <line x1="20" y1="108" x2="180" y2="108" stroke="rgba(0,229,255,0.12)" stroke-width="2"/>
+          <line x1="60" y1="95" x2="60" y2="115" stroke="rgba(0,229,255,0.10)" stroke-width="2"/>
+          <line x1="100" y1="90" x2="100" y2="115" stroke="rgba(0,229,255,0.10)" stroke-width="2"/>
+          <line x1="140" y1="95" x2="140" y2="115" stroke="rgba(0,229,255,0.10)" stroke-width="2"/>
+          <rect x="80" y="20" width="40" height="90" fill="rgba(0,140,180,0.65)" rx="3"/>
+          <rect x="84" y="26" width="6" height="4" fill="rgba(0,229,255,0.45)" rx="0.5"/>
+          <rect x="93" y="26" width="6" height="4" fill="rgba(0,229,255,0.45)" rx="0.5"/>
+          <rect x="102" y="26" width="6" height="4" fill="rgba(200,0,255,0.35)" rx="0.5"/>
+          <rect x="111" y="26" width="6" height="4" fill="rgba(0,229,255,0.40)" rx="0.5"/>
+          <rect x="84" y="34" width="6" height="4" fill="rgba(0,229,255,0.35)" rx="0.5"/>
+          <rect x="93" y="34" width="6" height="4" fill="rgba(200,0,255,0.30)" rx="0.5"/>
+          <rect x="102" y="34" width="6" height="4" fill="rgba(0,229,255,0.40)" rx="0.5"/>
+          <rect x="111" y="34" width="6" height="4" fill="rgba(0,229,255,0.35)" rx="0.5"/>
+          <rect x="44" y="48" width="22" height="62" fill="rgba(0,100,160,0.60)" rx="2"/>
+          <rect x="46" y="42" width="18" height="8" fill="rgba(0,120,180,0.65)" rx="1"/>
+          <rect x="50" y="33" width="10" height="10" fill="rgba(0,100,160,0.60)" rx="1"/>
+          <rect x="54" y="24" width="2" height="10" fill="rgba(0,229,255,0.70)"/>
+          <rect x="134" y="52" width="22" height="58" fill="rgba(0,100,160,0.60)" rx="2"/>
+          <rect x="136" y="45" width="18" height="9" fill="rgba(0,120,180,0.65)" rx="1"/>
+          <rect x="139" y="36" width="12" height="10" fill="rgba(0,100,160,0.60)" rx="1"/>
+          <rect x="144" y="27" width="2" height="10" fill="rgba(200,0,255,0.60)"/>
+          <rect x="99" y="8" width="2" height="14" fill="rgba(0,229,255,0.80)"/>
+          <circle cx="100" cy="7" r="3" fill="rgba(0,229,255,0.90)"/>
+          <circle cx="100" cy="7" r="7" fill="rgba(0,229,255,0.20)"/>
+          <circle cx="55" cy="22" r="2" fill="rgba(200,0,255,0.80)"/>
+          <circle cx="145" cy="25" r="2" fill="rgba(200,0,255,0.80)"/>
+        </svg>
+      </div>
+
+      <div class="rib-ring" style="inset:10%;"></div>
+      <div class="rib-ring" style="inset:22%;"></div>
+      <div class="dome-collar"></div>
+
+      <span class="dome-label">ECON · REACTOR</span>
+
+      <div class="fuel-tank-wrap">
+        <svg class="fuel-tank-svg" width="32" height="96" viewBox="0 0 32 96" aria-hidden="true">
+          <rect x="6" y="8" width="20" height="80" rx="4" fill="none" stroke="rgba(0,229,255,0.2)" stroke-width="1.5"/>
+          <rect id="d2-tank-fill" x="7" y="88" width="18" rx="3" height="0" fill="#00e5ff"/>
+        </svg>
+
+        <div class="fuel-info">
+          <div id="d2-usdc" class="dome-primary" style="font-size:clamp(1.4rem,7vw,2.2rem)">$--</div>
+          <div id="d2-earned" class="dome-secondary"></div>
+          <div id="d2-repaid" class="dome-secondary" style="color:rgba(255,176,0,0.7)"></div>
+
+          <div class="micro-bar-row">
+            <span class="micro-bar-label">24h earned</span>
+            <div class="micro-bar-track"><div id="d2-earned-bar" class="micro-bar-fill cyan" style="width:0%"></div></div>
+          </div>
+          <div class="micro-bar-row">
+            <span class="micro-bar-label">24h repaid</span>
+            <div class="micro-bar-track"><div id="d2-repaid-bar" class="micro-bar-fill amber" style="width:0%"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="d2-yield-spread" class="yield-spread-line">
+        Borrow Cost: N/A <span class="yield-spread-sep"> | </span>
+        Engine Yield: N/A <span class="yield-spread-sep"> | </span>
+        <span class="nev-null">NET PROFITABILITY: N/A</span>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ══ SENTINEL: Strategy Sentinel ════════════════════════════════════════ -->
+  <section class="dome-section sentinel" id="dome-sentinel">
+    <div class="dome-shell">
+
+      <!-- City illustration -->
+      <div class="dome-city">
+        <svg viewBox="0 0 200 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <ellipse cx="100" cy="110" rx="90" ry="16" fill="rgba(100,80,20,0.25)"/>
+          <line x1="20" y1="108" x2="180" y2="108" stroke="rgba(200,160,0,0.14)" stroke-width="3"/>
+          <line x1="100" y1="80" x2="100" y2="115" stroke="rgba(200,160,0,0.14)" stroke-width="3"/>
+          <rect x="93" y="56" width="14" height="54" fill="rgba(180,130,20,0.65)" rx="2"/>
+          <rect x="80" y="50" width="40" height="10" fill="rgba(200,150,30,0.70)" rx="5"/>
+          <rect x="94" y="30" width="12" height="22" fill="rgba(160,120,20,0.65)" rx="2"/>
+          <rect x="99" y="20" width="2" height="12" fill="rgba(200,160,40,0.80)"/>
+          <path d="M92,20 Q100,12 108,20" fill="rgba(180,140,30,0.65)" stroke="rgba(220,170,50,0.50)" stroke-width="1"/>
+          <rect x="28" y="82" width="36" height="24" fill="rgba(140,100,15,0.55)" rx="2"/>
+          <line x1="28" y1="76" x2="64" y2="76" stroke="rgba(200,160,40,0.40)" stroke-width="2"/>
+          <line x1="28" y1="71" x2="64" y2="71" stroke="rgba(200,160,40,0.30)" stroke-width="2"/>
+          <line x1="28" y1="66" x2="64" y2="66" stroke="rgba(200,160,40,0.20)" stroke-width="2"/>
+          <rect x="136" y="75" width="40" height="31" fill="rgba(140,100,15,0.55)" rx="2"/>
+          <rect x="148" y="60" width="16" height="17" fill="rgba(160,120,20,0.60)" rx="2"/>
+          <circle cx="100" cy="50" r="3" fill="rgba(255,200,0,0.85)"/>
+          <circle cx="100" cy="50" r="8" fill="rgba(255,200,0,0.15)"/>
+          <circle cx="36" cy="80" r="2" fill="rgba(255,160,0,0.75)"/>
+          <circle cx="56" cy="80" r="2" fill="rgba(255,160,0,0.55)"/>
+          <circle cx="152" cy="72" r="2" fill="rgba(255,160,0,0.70)"/>
+        </svg>
+      </div>
+
+      <div class="rib-ring" style="inset:10%;"></div>
+      <div class="rib-ring" style="inset:24%;"></div>
+      <div class="dome-collar"></div>
+
+      <span class="dome-label">SENTINEL · STRATEGY</span>
+
+      <div class="sw-wrap">
+        <svg class="sentiment-wheel" viewBox="0 0 200 200" aria-hidden="true">
+          <circle cx="100" cy="100" r="72" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="12"/>
+          <circle cx="100" cy="100" r="72" fill="none"
+            stroke="rgba(255,32,32,0.28)" stroke-width="12" stroke-linecap="butt"
+            stroke-dasharray="135.72 452.39" transform="rotate(-90 100 100)"/>
+          <circle cx="100" cy="100" r="72" fill="none"
+            stroke="rgba(255,176,0,0.28)" stroke-width="12" stroke-linecap="butt"
+            stroke-dasharray="180.96 452.39" stroke-dashoffset="-135.72"
+            transform="rotate(-90 100 100)"/>
+          <circle cx="100" cy="100" r="72" fill="none"
+            stroke="rgba(0,229,255,0.28)" stroke-width="12" stroke-linecap="butt"
+            stroke-dasharray="135.72 452.39" stroke-dashoffset="-316.68"
+            transform="rotate(-90 100 100)"/>
+          <circle id="d4-arc-active" cx="100" cy="100" r="72" fill="none"
+            stroke="#ffb000" stroke-width="4" stroke-linecap="round"
+            stroke-dasharray="0 452.39" transform="rotate(-90 100 100)"
+            style="transition:stroke-dasharray 0.5s ease,stroke 0.4s;"/>
+          <g id="d4-needle" transform="rotate(180 100 100)"
+             style="transform-origin:100px 100px;transition:transform 0.55s cubic-bezier(.4,0,.2,1);">
+            <line x1="100" y1="34" x2="100" y2="97"
+              stroke="rgba(255,255,255,0.9)" stroke-width="2.5" stroke-linecap="round"/>
+            <circle cx="100" cy="34" r="5" fill="white" opacity="0.92"/>
+            <circle cx="100" cy="100" r="6" fill="rgba(255,255,255,0.08)"
+              stroke="rgba(255,255,255,0.2)" stroke-width="1.5"/>
+          </g>
+          <line x1="100" y1="14" x2="100" y2="22" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" transform="rotate(0 100 100)"/>
+          <line x1="100" y1="14" x2="100" y2="22" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" transform="rotate(108 100 100)"/>
+          <line x1="100" y1="14" x2="100" y2="22" stroke="rgba(255,255,255,0.15)" stroke-width="1.5" transform="rotate(252 100 100)"/>
+        </svg>
+        <div class="sw-center">
+          <div id="d4-likelihood-pct" class="sw-pct">--%</div>
+          <div id="d4-sentiment-label" class="sw-label neutral">NEUTRAL</div>
+        </div>
+      </div>
+
+      <div class="sw-indicators">
+        <div class="sw-indicator">
+          <div class="sw-ind-header">
+            <span class="sw-ind-name">GROWTH ENGINE</span>
+            <span class="sw-ind-formula">g&nbsp;=&nbsp;x&nbsp;÷&nbsp;100</span>
+          </div>
+          <div class="sw-ind-track"><div id="d4-growth-bar" class="sw-ind-fill sw-growth" style="width:50%"></div></div>
+        </div>
+        <div class="sw-indicator">
+          <div class="sw-ind-header">
+            <span class="sw-ind-name">DEFENSIVE POSTURE</span>
+            <span class="sw-ind-formula">d&nbsp;=&nbsp;(100&nbsp;−&nbsp;x)&nbsp;÷&nbsp;100</span>
+          </div>
+          <div class="sw-ind-track"><div id="d4-defensive-bar" class="sw-ind-fill sw-defensive" style="width:50%"></div></div>
+        </div>
+      </div>
+
+      <div id="d4-activity-feed" class="activity-feed"></div>
+
+    </div>
+  </section>
+
+  <!-- ══ INTEL: Mission Arc + Cycle Intelligence ════════════════════════════ -->
+  <section class="dome-section intel" id="dome-intel">
+
+    <div class="intel-header">CYCLE INTELLIGENCE · MISSION CONTROL</div>
+
+    <div class="intel-body">
+
+      <!-- Mission arc row -->
+      <div class="intel-mission-row">
+        <svg class="intel-mission-arc" viewBox="0 0 200 200" aria-hidden="true">
+          <!-- Core Engine arc — r=85 -->
+          <circle cx="100" cy="100" r="85" fill="none" stroke="rgba(0,229,255,0.06)" stroke-width="5"/>
+          <circle id="d3-arc-core" cx="100" cy="100" r="85" fill="none"
+            stroke="#00e5ff" stroke-width="5" stroke-linecap="round"
+            stroke-dasharray="534" stroke-dashoffset="534"
+            transform="rotate(-90 100 100)" data-r="85"
+            style="transition:stroke-dashoffset 1s linear, stroke 1s;"/>
+          <!-- Repay arc — r=72 -->
+          <circle cx="100" cy="100" r="72" fill="none" stroke="rgba(255,176,0,0.06)" stroke-width="4"/>
+          <circle id="d3-arc-repay" cx="100" cy="100" r="72" fill="none"
+            stroke="#ffb000" stroke-width="4" stroke-linecap="round"
+            stroke-dasharray="452" stroke-dashoffset="452"
+            transform="rotate(-90 100 100)" data-r="72"
+            style="transition:stroke-dashoffset 1s linear;"/>
+          <!-- Nurse arc — r=60 -->
+          <circle cx="100" cy="100" r="60" fill="none" stroke="rgba(0,255,136,0.06)" stroke-width="3"/>
+          <circle id="d3-arc-nurse" cx="100" cy="100" r="60" fill="none"
+            stroke="#00ff88" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="377" stroke-dashoffset="377"
+            transform="rotate(-90 100 100)" data-r="60"
+            style="transition:stroke-dashoffset 1s linear;"/>
+        </svg>
+
+        <div class="intel-mission-info">
+          <div id="d3-countdown" class="countdown-primary">T-MINUS --:--</div>
+        </div>
+      </div>
+
+      <!-- Next Trigger Scheduler Grid -->
+      <div class="sched-grid">
+        <div class="sched-grid-header">NEXT TRIGGER · ALL FUNCTIONS</div>
+        <div class="sched-row">
+          <div class="sched-row-labels">
+            <span class="sched-fn-name" style="color:#00e5ff">Growth · Capacity · Macro · Micro</span>
+            <span class="sched-fn-interval">every 2 min</span>
+          </div>
+          <div id="sched-core-timer" class="sched-timer">--:--</div>
+        </div>
+        <div class="sched-row">
+          <div class="sched-row-labels">
+            <span class="sched-fn-name" style="color:#00ff88">Nurse Sweep</span>
+            <span class="sched-fn-interval">every 5 min</span>
+          </div>
+          <div id="sched-nurse-timer" class="sched-timer">--:--</div>
+        </div>
+        <div class="sched-row">
+          <div class="sched-row-labels">
+            <span class="sched-fn-name" style="color:#ffb000">Repay Deleverager</span>
+            <span class="sched-fn-interval">every 18 min</span>
+          </div>
+          <div id="sched-repay-timer" class="sched-timer">--:--</div>
+        </div>
+      </div>
+
+      <!-- CI Cards -->
+      <div class="ci-grid">
+
+        <!-- Card 1: Equilibrium Status -->
+        <div class="ci-card">
+          <div class="ci-card-label">EQUILIBRIUM STATUS</div>
+          <div id="ci-eq-status" class="ci-status-badge ci-active">ACTIVE</div>
+          <div id="ci-eq-countdown" class="ci-countdown">T-MINUS --:--</div>
+          <div id="ci-eq-sub" class="ci-sub-line">-- cycles remaining at current pace</div>
+        </div>
+
+        <!-- Card 2: Breakout Calculator -->
+        <div class="ci-card">
+          <div class="ci-card-label">BREAKOUT CALCULATOR</div>
+          <div id="ci-breakout-amount" class="ci-breakout-primary">$--</div>
+          <div class="ci-sub-line">collateral needed to restart Capacity</div>
+          <div id="ci-breakout-pct" class="ci-breakout-pct">-- % market appreciation</div>
+        </div>
+
+        <!-- Card 3: Cycle PnL + Forecast -->
+        <div class="ci-card">
+          <div class="ci-card-label">CYCLE PnL · 24H</div>
+          <div class="ci-pnl-row">
+            <span class="ci-pnl-key">Gross generated</span>
+            <span id="ci-pnl-gross"  class="ci-pnl-val">$--</span>
+          </div>
+          <div class="ci-pnl-row">
+            <span class="ci-pnl-key">Repaid to debt</span>
+            <span id="ci-pnl-repaid" class="ci-pnl-val ci-repaid">$--</span>
+          </div>
+          <div class="ci-pnl-row">
+            <span class="ci-pnl-key">Net USDC kept</span>
+            <span id="ci-pnl-net"    class="ci-pnl-val ci-net">$--</span>
+          </div>
+          <div id="ci-last-cycle-line" class="ci-last-cycle-line"></div>
+          <hr class="ci-divider">
+          <div class="ci-forecast-label">NEXT 10 EVENTS FORECAST</div>
+          <div class="ci-pnl-row">
+            <span class="ci-pnl-key">Forecast gross</span>
+            <span id="ci-fc-gross"  class="ci-pnl-val">$--</span>
+          </div>
+          <div class="ci-pnl-row">
+            <span class="ci-pnl-key">Forecast repaid</span>
+            <span id="ci-fc-repaid" class="ci-pnl-val ci-repaid">$--</span>
+          </div>
+          <div class="ci-pnl-row">
+            <span class="ci-pnl-key">Forecast net</span>
+            <span id="ci-fc-net"    class="ci-pnl-val ci-net">$--</span>
+          </div>
+          <div id="ci-fc-time" class="ci-sub-line" style="text-align:right;margin-top:0.3rem"></div>
+        </div>
+
+      </div>
+
+      <!-- Milestones -->
+      <div class="intel-milestones">
+        <div id="d3-milestone-0" class="milestone-row">$100 — <span class="milestone-pct">--</span>%</div>
+        <div id="d3-milestone-1" class="milestone-row">$1K — <span class="milestone-pct">--</span>%</div>
+        <div id="d3-milestone-2" class="milestone-row">$10K — <span class="milestone-pct">--</span>%</div>
+      </div>
+
+    </div>
+  </section>
+
+</div><!-- end dome-scroll -->
+
+<!-- Bottom navigation dock -->
+<nav id="bottom-nav">
+  <button class="dome-nav-tile active" id="nav-ops" data-dome="dome-ops">
+    <span class="dome-nav-tile-metric" id="tile-ops-metric">HF --</span>
+    <span class="dome-nav-tile-label">OPS</span>
+    <span class="dome-nav-tile-dot" id="tile-ops-dot"></span>
+  </button>
+  <button class="dome-nav-tile" id="nav-infra" data-dome="dome-infra">
+    <span class="dome-nav-tile-metric" id="tile-infra-metric">-- ETH</span>
+    <span class="dome-nav-tile-label">INFRA</span>
+    <span class="dome-nav-tile-dot" id="tile-infra-dot"></span>
+  </button>
+  <button class="dome-nav-tile" id="nav-econ" data-dome="dome-econ">
+    <span class="dome-nav-tile-metric" id="tile-econ-metric">$--</span>
+    <span class="dome-nav-tile-label">ECON</span>
+    <span class="dome-nav-tile-dot" id="tile-econ-dot"></span>
+  </button>
+  <button class="dome-nav-tile" id="nav-sentinel" data-dome="dome-sentinel">
+    <span class="dome-nav-tile-metric" id="tile-sentinel-metric">--%</span>
+    <span class="dome-nav-tile-label">SENTINEL</span>
+    <span class="dome-nav-tile-dot" id="tile-sentinel-dot"></span>
+  </button>
+  <button class="dome-nav-tile" id="nav-intel" data-dome="dome-intel">
+    <span class="dome-nav-tile-metric" id="tile-intel-metric">T---:--</span>
+    <span class="dome-nav-tile-label">INTEL</span>
+    <span class="dome-nav-tile-dot" id="tile-intel-dot"></span>
+  </button>
+  <div class="nav-util-group">
+    <button class="nav-util-btn" id="nav-activity">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <polyline points="22,12 18,12 15,21 9,3 6,12 2,12"/>
+      </svg>
+      LOG
+    </button>
+    <button class="nav-util-btn" id="nav-settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      CFG
+    </button>
+  </div>
+</nav>
+
+<!-- ── Overlays ─────────────────────────────────────────────────────────── -->
+
+<!-- Activity overlay -->
+<div class="overlay" id="activity-overlay">
+  <div class="overlay-title">ACTIVITY LOG</div>
+  <div id="activity-overlay-list" class="activity-list">
+    <div style="color:rgba(255,255,255,0.3);font-size:0.7rem;">Loading…</div>
+  </div>
+</div>
+
+<!-- Hex overview overlay -->
+<div class="overlay" id="hex-overlay">
+  <div class="overlay-title">DOME OVERVIEW</div>
+  <div class="hex-grid">
+    <div class="hex-row" id="hex-row-1"></div>
+    <div class="hex-row" id="hex-row-2"></div>
+    <div class="hex-row" id="hex-row-3"></div>
+  </div>
+</div>
+
+<!-- Settings overlay -->
+<div class="overlay" id="settings-overlay">
+  <div class="overlay-title">SETTINGS</div>
+
+  <div class="settings-row">
+    <span>Reduce Motion</span>
+    <button class="toggle-btn" id="reduce-motion-toggle"></button>
+  </div>
+
+  <div class="settings-row">
+    <span>Wallet / Reconnect</span>
+    <button class="toggle-btn" id="settings-wallet-btn" onclick="P87.showModal()" style="font-size:0.6rem;padding:4px 8px;width:auto;border:1px solid rgba(0,229,255,0.3);background:rgba(0,229,255,0.06);color:rgba(0,229,255,0.8);cursor:pointer;border-radius:2px;">OPEN</button>
+  </div>
+
+  <div class="settings-row" style="font-size:0.65rem;color:rgba(224,240,255,0.35);">
+    <span>Stale data threshold: 120s</span>
+  </div>
+  <div class="settings-row" style="font-size:0.65rem;color:rgba(224,240,255,0.35);">
+    <span>Telemetry refresh: 30s</span>
+  </div>
+  <div class="settings-row" style="font-size:0.65rem;color:rgba(224,240,255,0.35);">
+    <span>Version: v6.0</span>
+  </div>
+</div>
+
+<script src="/static/overseer.js?v=5"></script>
+<script nonce="{{ csp_nonce }}">
+{% raw %}
+/* ── Overseer Auth Bridge ────────────────────────────────────────────────
+   Wallet connect / Sequential Signer / eject logic for the connection modal.
+   Calls P87.onWalletConnected() / P87.onWalletEjected() to drive overseer state.
+──────────────────────────────────────────────────────────────────────────── */
+
+/* ── MetaMask-Only Provider ────────────────────────────────────────────────
+   PROJECT 87 exclusively supports MetaMask on desktop.
+   EIP-6963 announcements are collected, but only io.metamask is accepted.
+   All other wallets (Keplr, Coinbase, Rabby, Brave, etc.) are ignored.
+──────────────────────────────────────────────────────────────────────────── */
+window._p87Providers = [];
+window.addEventListener('eip6963:announceProvider', function(evt) {
+  if (evt.detail && evt.detail.provider) {
+    var alreadyKnown = window._p87Providers.some(function(p) {
+      return p.info && evt.detail.info && p.info.uuid === evt.detail.info.uuid;
+    });
+    if (!alreadyKnown) window._p87Providers.push(evt.detail);
+  }
+});
+window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+window.getProvider = function() {
+  return new Promise(function(resolve) {
+    setTimeout(function() {
+      /* 1. Prefer EIP-6963 MetaMask announcement (rdns = io.metamask) */
+      var mmEntry = window._p87Providers.find(function(p) {
+        return p.info && p.info.rdns === 'io.metamask';
+      });
+      if (mmEntry) { resolve(mmEntry.provider); return; }
+
+      /* 2. Fall back to window.ethereum only if it is MetaMask */
+      if (window.ethereum && window.ethereum.isMetaMask) {
+        resolve(window.ethereum);
+        return;
+      }
+
+      /* 3. No MetaMask found — return null (other wallets are not supported) */
+      resolve(null);
+    }, 600);
+  });
+};
+/* ──────────────────────────────────────────────────────────────────────── */
+
+var cmActivationRunning = false;
+
+var ERC20_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function approve(address,uint256) returns (bool)',
+  'function allowance(address,address) view returns (uint256)'
+];
+var DM_DELEGATE_ABI = [
+  'function approveDelegation(uint256,uint256,bool,bool,bool,bool)'
+];
+var DEBT_NONCE_ABI = [
+  'function nonces(address) view returns (uint256)'
+];
+
+function cmAuthFetch(url, opts) {
+  opts = opts || {};
+  var token = (window.P87 && P87._getAuthToken) ? P87._getAuthToken() : localStorage.getItem('authToken');
+  opts.headers = Object.assign({ 'X-Auth-Token': token || '', 'Content-Type': 'application/json' }, opts.headers || {});
+  return fetch(url, opts).then(function(resp) {
+    if (resp.status === 401) { cmShowPhase('connect'); return null; }
+    return resp;
+  });
+}
+
+function cmSetStatus(id, msg, cls) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'cm-status' + (cls ? ' ' + cls : '');
+}
+
+function cmSetProgress(pct, label) {
+  var fill = document.getElementById('cm-progress-fill');
+  var lbl  = document.getElementById('cm-progress-label');
+  if (fill) fill.style.width = pct + '%';
+  if (lbl)  lbl.textContent  = label;
+}
+
+function cmSetStepState(num, state, statusText, txHash) {
+  var row    = document.getElementById('cm-stepRow' + num);
+  var status = document.getElementById('cm-step' + num + 'Status');
+  var tx     = document.getElementById('cm-step' + num + 'Tx');
+  if (row)    row.className    = 'cm-step-row ' + state;
+  if (status) status.textContent = statusText;
+  if (tx && txHash) tx.textContent = 'TX: ' + txHash.slice(0, 18) + '…';
+}
+
+function cmShowPhase(phase) {
+  document.getElementById('cm-connect-phase').style.display   = (phase === 'connect')   ? '' : 'none';
+  document.getElementById('cm-signer-phase').style.display    = (phase === 'signer')    ? '' : 'none';
+  document.getElementById('cm-activated-phase').style.display = (phase === 'activated') ? '' : 'none';
+}
+
+/* Check activation status after wallet is known */
+async function cmCheckActivationStatus(wallet) {
+  try {
+    var resp = await cmAuthFetch('/api/wallet/activation-status');
+    if (!resp) return;
+    var data = await resp.json();
+    if (data.activated) {
+      cmShowActivatedPhase(wallet);
+    } else {
+      cmShowPhase('signer');
+      cmScanWbtcBalance(wallet);
+    }
+  } catch(e) {
+    cmShowPhase('signer');
+    cmScanWbtcBalance(wallet);
+  }
+}
+
+async function cmScanWbtcBalance(wallet) {
+  var disp = document.getElementById('cm-wbtc-bal');
+  if (!disp || !wallet) return;
+  var eth = await window.getProvider();
+  if (!eth) return;
+  try {
+    var provider = new ethers.providers.Web3Provider(eth);
+    var contract = new ethers.Contract(CONTRACTS.WBTC, ERC20_ABI, provider);
+    var bal = await contract.balanceOf(wallet);
+    var wbtcVal = parseFloat(ethers.utils.formatUnits(bal, 8));
+    disp.textContent = wbtcVal.toFixed(8) + ' WBTC';
+    if (bal.eq(0)) disp.style.color = '#ff2020';
+  } catch(e) {
+    if (disp) disp.textContent = 'SCAN FAILED';
+  }
+}
+
+async function cmCheckDelegationStatus() {
+  var statusEl  = document.getElementById('cm-delegation-status');
+  var resignBtn = document.getElementById('cm-resign-btn');
+  try {
+    var resp = await cmAuthFetch('/api/delegation-status');
+    if (!resp || !resp.ok) return;
+    var data = await resp.json();
+    var daiOk  = data.dai_allowance > 0;
+    var wethOk = data.weth_allowance > 0;
+    if (daiOk && wethOk) {
+      if (statusEl) { statusEl.textContent = 'CREDIT DELEGATION: DAI + WETH ACTIVE'; statusEl.className = 'cm-status ok'; }
+      if (resignBtn) resignBtn.style.display = 'none';
+    } else {
+      var missing = [];
+      if (!daiOk)  missing.push('DAI');
+      if (!wethOk) missing.push('WETH');
+      if (statusEl) { statusEl.textContent = 'DELEGATION EXPIRED: ' + missing.join(', ') + ' — RE-SIGN REQUIRED'; statusEl.className = 'cm-status err'; }
+      if (resignBtn) resignBtn.style.display = '';
+    }
+  } catch(e) {}
+}
+
+function cmShowActivatedPhase(wallet) {
+  cmShowPhase('activated');
+  var walletDisp = document.getElementById('cm-wallet-display');
+  if (walletDisp) walletDisp.textContent = wallet || '';
+  cmCheckDelegationStatus();
+}
+
+/* Request accounts with one automatic retry for MetaMask "Unexpected error" on Chromebook */
+async function requestAccounts(eth) {
+  try {
+    return await eth.request({ method: 'eth_requestAccounts' });
+  } catch(e1) {
+    var isPending  = e1.code === -32002;
+    var isRetryable = isPending ||
+                      e1.code === -32603 ||
+                      (e1.message && e1.message.toLowerCase().includes('unexpected'));
+    if (isRetryable) {
+      var hint = isPending
+        ? 'CHECK METAMASK FOR A PENDING POPUP, THEN RETRYING...'
+        : 'RETRYING CONNECTION...';
+      cmSetStatus('cm-connect-status', hint);
+      await new Promise(function(r) { setTimeout(r, isPending ? 3000 : 1000); });
+      return await eth.request({ method: 'eth_requestAccounts' });
+    }
+    throw e1;
+  }
+}
+
+/* Connect wallet button */
+async function cmConnectWallet() {
+  var btn        = document.getElementById('cm-connect-btn');
+  var mobileOpts = document.getElementById('cm-mobile-options');
+  var isMobile   = navigator.maxTouchPoints > 0 || /Android|iPhone|iPad/i.test(navigator.userAgent);
+
+  var eth = await window.getProvider();
+
+  if (!eth) {
+    if (isMobile) {
+      if (btn) btn.style.display = 'none';
+      if (mobileOpts) {
+        var base = window.location.href;
+        var mmLink = document.getElementById('cm-mm-deeplink');
+        var cbLink = document.getElementById('cm-cb-deeplink');
+        if (mmLink) mmLink.href = 'https://link.metamask.io/dapp/' + encodeURIComponent(base);
+        if (cbLink) cbLink.href = 'https://go.cb-wallet.io/dapp?url=' + encodeURIComponent(base);
+        mobileOpts.style.display = '';
+      }
+    } else {
+      var statusEl = document.getElementById('cm-connect-status');
+      if (statusEl) {
+        statusEl.className = 'cm-status';
+        statusEl.innerHTML =
+          '<div class="cm-install-prompt">' +
+            '<div class="cm-install-heading">METAMASK NOT DETECTED</div>' +
+            '<div style="font-size:0.78rem;color:#7ecfff;margin-bottom:10px">PROJECT 87 requires MetaMask. Other wallets are not supported.</div>' +
+            '<a href="https://metamask.io/download" target="_blank" rel="noopener" class="cm-btn cm-install-btn">[ INSTALL METAMASK ]</a>' +
+            '<button class="cm-btn cm-btn--amber cm-install-btn" onclick="window.location.reload()">[ I\'VE INSTALLED IT — RETRY ]</button>' +
+          '</div>';
+      }
+    }
+    return;
+  }
+
+  try {
+    btn.textContent = '[ CONNECTING... ]';
+    btn.disabled = true;
+    cmSetStatus('cm-connect-status', '');
+
+    var accounts = await requestAccounts(eth);
+    var wallet = accounts[0];
+
+    cmSetStatus('cm-connect-status', 'AUTHENTICATING...');
+    var resp = await fetch('/api/auth/wallet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ walletAddress: wallet })
+    });
+    if (!resp.ok) throw new Error('Auth failed (' + resp.status + ')');
+    var data = await resp.json();
+
+    P87.onWalletConnected(data.authToken, data.walletAddress);
+
+    btn.textContent = '[ CONNECTED ]';
+    btn.classList.add('cm-btn--green');
+
+    await new Promise(function(r) { setTimeout(r, 400); });
+    cmCheckActivationStatus(data.walletAddress);
+
+  } catch(e) {
+    btn.textContent = '[ INITIALIZE CONNECTION ]';
+    btn.disabled = false;
+    var msg = e.message || 'Unknown error';
+    var code = (e.code !== undefined && e.code !== null) ? ' [code:' + e.code + ']' : '';
+    if (e.code === 4001) { msg = 'Connection rejected.'; code = ''; }
+    cmSetStatus('cm-connect-status', 'CONNECTION FAILED: ' + msg + code, 'err');
+  }
+}
+
+/* Close modal (launch overseer) */
+function cmLaunchOverseer() {
+  P87.powerOn();
+}
+
+/* Eject wallet */
+async function cmEjectWallet() {
+  if (!confirm('CONFIRM: DISCONNECT WALLET AND TERMINATE SESSION?')) return;
+  try {
+    await cmAuthFetch('/api/auth/disconnect', { method: 'POST' });
+  } catch(e) {}
+  P87.onWalletEjected();
+  cmShowPhase('connect');
+  var btn = document.getElementById('cm-connect-btn');
+  if (btn) { btn.textContent = '[ INITIALIZE CONNECTION ]'; btn.disabled = false; btn.className = 'cm-btn'; }
+  cmSetStatus('cm-connect-status', '');
+}
+
+/* Hard reset */
+async function cmHardReset() {
+  if (!confirm('HARD RESET: DELETE ALL WALLET DATA AND KEYS? THIS CANNOT BE UNDONE.')) return;
+  try {
+    var resp = await cmAuthFetch('/api/wallet/hard-reset', { method: 'POST' });
+    if (resp && resp.ok) {
+      P87.onWalletEjected();
+      cmShowPhase('connect');
+    }
+  } catch(e) {}
+}
+
+/* Re-sign credit delegation */
+async function cmResignDelegation() {
+  var statusEl  = document.getElementById('cm-resign-status');
+  var resignBtn = document.getElementById('cm-resign-btn');
+  var eth = await window.getProvider();
+  if (!eth) {
+    cmSetStatus('cm-resign-status', 'METAMASK NOT DETECTED. Please install MetaMask in this browser.', 'err');
+    return;
+  }
+  resignBtn.disabled = true;
+  resignBtn.textContent = '[ SIGNING... ]';
+  cmSetStatus('cm-resign-status', 'PREPARING EIP-712 DATA...');
+
+  try {
+    var provider = new ethers.providers.Web3Provider(eth);
+    var signer   = provider.getSigner();
+    var userAddress = await signer.getAddress();
+    var deadline = Math.floor(Date.now() / 1000) + (30 * 24 * 3600);
+
+    var delegationTypes = {
+      DelegationWithSig: [
+        { name: 'delegatee', type: 'address' },
+        { name: 'value',     type: 'uint256' },
+        { name: 'nonce',     type: 'uint256' },
+        { name: 'deadline',  type: 'uint256' }
+      ]
+    };
+
+    cmSetStatus('cm-resign-status', 'SIGN DAI DELEGATION IN WALLET (1 of 2)...');
+    var daiDebtContract = new ethers.Contract(CONTRACTS.DAI_DEBT, DEBT_NONCE_ABI, provider);
+    var daiNonce = await daiDebtContract.nonces(userAddress);
+    var daiDomain = { name: 'Aave Arbitrum Variable Debt DAI', version: '1', chainId: 42161, verifyingContract: CONTRACTS.DAI_DEBT };
+    var daiValue  = { delegatee: CONTRACTS.BOT_WALLET, value: ethers.constants.MaxUint256, nonce: daiNonce, deadline: deadline };
+    var daiSig    = await signer._signTypedData(daiDomain, delegationTypes, daiValue);
+
+    cmSetStatus('cm-resign-status', 'SIGN WETH DELEGATION IN WALLET (2 of 2)...');
+    var wethDebtContract = new ethers.Contract(CONTRACTS.WETH_DEBT, DEBT_NONCE_ABI, provider);
+    var wethNonce = await wethDebtContract.nonces(userAddress);
+    var wethDomain = { name: 'Aave Arbitrum Variable Debt WETH', version: '1', chainId: 42161, verifyingContract: CONTRACTS.WETH_DEBT };
+    var wethValue  = { delegatee: CONTRACTS.BOT_WALLET, value: ethers.constants.MaxUint256, nonce: wethNonce, deadline: deadline };
+    var wethSig    = await signer._signTypedData(wethDomain, delegationTypes, wethValue);
+
+    cmSetStatus('cm-resign-status', 'SUBMITTING TO BACKEND...');
+    var resp = await cmAuthFetch('/api/register-wallet', {
+      method: 'POST',
+      body: JSON.stringify({ dai_signature: daiSig, weth_signature: wethSig, deadline: deadline })
+    });
+
+    if (resp && resp.ok) {
+      var result = await resp.json();
+      if (result.dai_borrow_allowance > 0 && result.weth_borrow_allowance > 0) {
+        cmSetStatus('cm-resign-status', 'RE-SIGNED — CREDIT DELEGATION ACTIVE', 'ok');
+        resignBtn.style.display = 'none';
+        var delStatus = document.getElementById('cm-delegation-status');
+        if (delStatus) { delStatus.textContent = 'CREDIT DELEGATION: DAI + WETH ACTIVE'; delStatus.className = 'cm-status ok'; }
+      } else {
+        cmSetStatus('cm-resign-status', 'SUBMITTED — VERIFYING ON-CHAIN (BACKGROUND PROCESSOR WILL RETRY)');
+      }
+    } else {
+      var errData = resp ? await resp.json().catch(function() { return {}; }) : {};
+      throw new Error(errData.error || 'Backend submission failed');
+    }
+  } catch(e) {
+    cmSetStatus('cm-resign-status', 'RE-SIGN FAILED: ' + (e.message || e), 'err');
+  } finally {
+    resignBtn.disabled = false;
+    resignBtn.textContent = '[ RE-SIGN CREDIT DELEGATION ]';
+  }
+}
+
+/* Sequential Signer activation */
+async function cmRunActivationSequence() {
+  if (cmActivationRunning) return;
+  var eth = await window.getProvider();
+  if (!eth) {
+    cmSetStatus('cm-activation-status', 'METAMASK NOT DETECTED. Please install MetaMask in this browser.', 'err');
+    return;
+  }
+
+  var btn = document.getElementById('cm-activate-btn');
+
+  function resetBtn(label) {
+    btn.textContent = label || '[ RETRY ACTIVATION ]';
+    btn.disabled = false;
+    cmActivationRunning = false;
+  }
+
+  function activationError(error, failedStep) {
+    var fullMsg = (error.message || '') + ' ' + (error.data && error.data.message || '') + ' ' + (error.reason || '');
+    var fullLower = fullMsg.toLowerCase();
+    var msg = error.reason || error.message || 'Unknown error';
+    var isInsufficientFunds =
+      fullLower.indexOf('insufficient funds') !== -1 ||
+      error.code === 'INSUFFICIENT_FUNDS' || error.code === -32000 ||
+      fullLower.indexOf('gas required exceeds allowance') !== -1 ||
+      fullLower.indexOf('exceeds the configured cap') !== -1 ||
+      fullLower.indexOf('sender doesn\'t have enough funds') !== -1;
+    if (isInsufficientFunds) {
+      msg = 'Insufficient ETH for gas fees. Add ETH to your wallet and retry.';
+    } else if (error.code === 4001 || (error.message && error.message.indexOf('user rejected') !== -1)) {
+      msg = 'Transaction rejected by user.';
+    } else if (error.code === -32603) {
+      msg = 'RPC error — check your wallet network.';
+    }
+    cmSetProgress(0, 'FAILED: ' + msg);
+    if (failedStep) cmSetStepState(failedStep, 'error', 'FAILED: ' + msg, null);
+    cmSetStatus('cm-activation-status', msg, 'err');
+    resetBtn();
+  }
+
+  cmActivationRunning = true;
+  btn.disabled = true;
+  btn.textContent = '[ PROCESSING... ]';
+  cmSetStatus('cm-activation-status', '');
+
+  var provider, signer, userAddress;
+
+  try {
+    await eth.request({ method: 'eth_requestAccounts' });
+    provider = new ethers.providers.Web3Provider(eth);
+    signer = provider.getSigner();
+    userAddress = await signer.getAddress();
+  } catch(e) {
+    activationError({ message: e.code === 4001 ? 'Wallet connection rejected.' : 'Could not connect to wallet.' }, null);
+    return;
+  }
+
+  try {
+    var network = await provider.getNetwork();
+    if (network.chainId !== 42161) {
+      cmSetProgress(0, 'WRONG NETWORK — switching to Arbitrum...');
+      try {
+        await eth.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0xa4b1' }] });
+      } catch(switchErr) {
+        if (switchErr.code === 4902) {
+          await eth.request({ method: 'wallet_addEthereumChain', params: [{ chainId: '0xa4b1', chainName: 'Arbitrum One', nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://arb1.arbitrum.io/rpc'], blockExplorerUrls: ['https://arbiscan.io'] }] });
+        } else {
+          activationError({ message: 'Could not switch to Arbitrum. Switch manually in your wallet.' }, null);
+          return;
+        }
+      }
+      provider = new ethers.providers.Web3Provider(eth);
+      signer = provider.getSigner();
+    }
+  } catch(e) {
+    activationError({ message: 'Network check failed: ' + (e.message || e) }, null);
+    return;
+  }
+
+  if (!CONTRACTS.DM || CONTRACTS.DM.length < 42 || CONTRACTS.DM.indexOf('{{') !== -1) {
+    activationError({ message: 'Delegation Manager address not configured. Contact support.' }, null);
+    return;
+  }
+  var sigData  = { daiSignature: null, wethSignature: null, deadline: null };
+  var txHashes = { approve: null, delegation: null, usdc: null, usdt: null };
+
+  /* Step 1: Approve WBTC */
+  try {
+    cmSetProgress(5, 'Step 1/5: Checking WBTC balance...');
+    cmSetStepState(1, 'active', 'CHECKING BALANCE...', null);
+    var wbtcContract = new ethers.Contract(CONTRACTS.WBTC, ERC20_ABI, signer);
+    var totalBalance = await wbtcContract.balanceOf(userAddress);
+    if (totalBalance.eq(0)) throw new Error('No WBTC found. Deposit WBTC first.');
+    cmSetProgress(10, 'Step 1/5: Approve unlimited WBTC to Delegation Manager...');
+    cmSetStepState(1, 'active', 'AWAITING WALLET CONFIRMATION...', null);
+    var tx1 = await wbtcContract.approve(CONTRACTS.DM, ethers.constants.MaxUint256);
+    cmSetStepState(1, 'active', 'CONFIRMING ON-CHAIN...', tx1.hash);
+    await tx1.wait();
+    txHashes.approve = tx1.hash;
+    cmSetStepState(1, 'done', 'WBTC UNLIMITED APPROVAL SET', tx1.hash);
+  } catch(e) { activationError(e, 1); return; }
+
+  /* Step 2: Set strategy limits */
+  try {
+    cmSetProgress(25, 'Step 2/5: Configuring strategy limits...');
+    cmSetStepState(2, 'active', 'AWAITING WALLET CONFIRMATION...', null);
+    var dmContract = new ethers.Contract(CONTRACTS.DM, DM_DELEGATE_ABI, signer);
+    var tx2 = await dmContract.approveDelegation(
+      ethers.constants.MaxUint256, ethers.constants.MaxUint256, true, true, true, true
+    );
+    cmSetStepState(2, 'active', 'CONFIRMING ON-CHAIN...', tx2.hash);
+    await tx2.wait();
+    txHashes.delegation = tx2.hash;
+    cmSetStepState(2, 'done', 'STRATEGY LIMITS CONFIGURED', tx2.hash);
+  } catch(e) { activationError(e, 2); return; }
+
+  /* Step 3: Gasless credit delegation */
+  try {
+    cmSetProgress(40, 'Step 3/5: Preparing DAI credit delegation...');
+    cmSetStepState(3, 'active', 'PREPARING EIP-712 DATA (DAI)...', null);
+    var deadline = Math.floor(Date.now() / 1000) + (30 * 24 * 3600);
+    sigData.deadline = deadline;
+    var delegationTypes = {
+      DelegationWithSig: [
+        { name: 'delegatee', type: 'address' }, { name: 'value', type: 'uint256' },
+        { name: 'nonce', type: 'uint256' },     { name: 'deadline', type: 'uint256' }
+      ]
+    };
+    var daiDebtContract = new ethers.Contract(CONTRACTS.DAI_DEBT, DEBT_NONCE_ABI, provider);
+    var daiNonce = await daiDebtContract.nonces(userAddress);
+    cmSetStepState(3, 'active', 'SIGN DAI DELEGATION IN WALLET (1 of 2, NO GAS)', null);
+    var daiSig = await signer._signTypedData(
+      { name: 'Aave Arbitrum Variable Debt DAI', version: '1', chainId: 42161, verifyingContract: CONTRACTS.DAI_DEBT },
+      delegationTypes,
+      { delegatee: CONTRACTS.BOT_WALLET, value: ethers.constants.MaxUint256, nonce: daiNonce, deadline: deadline }
+    );
+    sigData.daiSignature = daiSig;
+    cmSetProgress(52, 'Step 3/5: Preparing WETH credit delegation...');
+    var wethDebtContract = new ethers.Contract(CONTRACTS.WETH_DEBT, DEBT_NONCE_ABI, provider);
+    var wethNonce = await wethDebtContract.nonces(userAddress);
+    cmSetStepState(3, 'active', 'SIGN WETH DELEGATION IN WALLET (2 of 2, NO GAS)', null);
+    var wethSig = await signer._signTypedData(
+      { name: 'Aave Arbitrum Variable Debt WETH', version: '1', chainId: 42161, verifyingContract: CONTRACTS.WETH_DEBT },
+      delegationTypes,
+      { delegatee: CONTRACTS.BOT_WALLET, value: ethers.constants.MaxUint256, nonce: wethNonce, deadline: deadline }
+    );
+    sigData.wethSignature = wethSig;
+    cmSetStepState(3, 'done', 'DAI + WETH CREDIT DELEGATION SIGNED', null);
+  } catch(e) { activationError(e, 3); return; }
+
+  /* Step 4: Approve USDC routing */
+  try {
+    cmSetProgress(65, 'Step 4/5: Approving USDC routing...');
+    cmSetStepState(4, 'active', 'AWAITING WALLET CONFIRMATION...', null);
+    var usdcContract = new ethers.Contract(CONTRACTS.USDC, ERC20_ABI, signer);
+    var tx4 = await usdcContract.approve(CONTRACTS.BOT_WALLET, ethers.constants.MaxUint256);
+    cmSetStepState(4, 'active', 'CONFIRMING ON-CHAIN...', tx4.hash);
+    await tx4.wait();
+    txHashes.usdc = tx4.hash;
+    cmSetStepState(4, 'done', 'USDC UNLIMITED APPROVAL SET', tx4.hash);
+  } catch(e) { activationError(e, 4); return; }
+
+  /* Step 5: Approve USDT short close */
+  try {
+    cmSetProgress(80, 'Step 5/5: Approving USDT for short close routing...');
+    cmSetStepState(5, 'active', 'AWAITING WALLET CONFIRMATION...', null);
+    var usdtContract = new ethers.Contract(CONTRACTS.USDT, ERC20_ABI, signer);
+    var tx5 = await usdtContract.approve(CONTRACTS.BOT_WALLET, ethers.constants.MaxUint256);
+    cmSetStepState(5, 'active', 'CONFIRMING ON-CHAIN...', tx5.hash);
+    await tx5.wait();
+    txHashes.usdt = tx5.hash;
+    cmSetStepState(5, 'done', 'USDT UNLIMITED APPROVAL SET', tx5.hash);
+  } catch(e) { activationError(e, 5); return; }
+
+  /* Register with backend */
+  try {
+    cmSetProgress(92, 'Registering with backend...');
+    var regResp = await cmAuthFetch('/api/register-wallet', {
+      method: 'POST',
+      body: JSON.stringify({
+        dai_signature: sigData.daiSignature,
+        weth_signature: sigData.wethSignature,
+        deadline: sigData.deadline,
+        approveTxHash: txHashes.approve,
+        delegationTxHash: txHashes.delegation,
+        usdcTxHash: txHashes.usdc,
+        usdtTxHash: txHashes.usdt
+      })
+    });
+
+    if (regResp && regResp.ok) {
+      cmSetProgress(100, 'ACTIVATION COMPLETE');
+      btn.textContent = '[ ACTIVATION COMPLETE ]';
+      cmActivationRunning = false;
+      setTimeout(function() {
+        var wallet = localStorage.getItem('walletAddress') || '';
+        cmShowActivatedPhase(wallet);
+      }, 1200);
+    } else {
+      var errData = regResp ? await regResp.json().catch(function() { return {}; }) : {};
+      throw new Error(errData.error || 'Backend registration failed');
+    }
+  } catch(e) {
+    activationError(e, null);
+  }
+
+  cmActivationRunning = false;
+}
+
+/* ── Wire up buttons ──────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', function() {
+  var connectBtn   = document.getElementById('cm-connect-btn');
+  var activateBtn  = document.getElementById('cm-activate-btn');
+  var closeBtn     = document.getElementById('cm-close-btn');
+  var ejectBtn     = document.getElementById('cm-eject-btn');
+  var hardResetBtn = document.getElementById('cm-hard-reset-btn');
+  var resignBtn    = document.getElementById('cm-resign-btn');
+  var walletBadge  = document.getElementById('strip-wallet-badge');
+
+  if (connectBtn)   connectBtn.addEventListener('click', cmConnectWallet);
+  if (activateBtn)  activateBtn.addEventListener('click', cmRunActivationSequence);
+  if (closeBtn)     closeBtn.addEventListener('click', cmLaunchOverseer);
+  if (ejectBtn)     ejectBtn.addEventListener('click', cmEjectWallet);
+  if (hardResetBtn) hardResetBtn.addEventListener('click', cmHardReset);
+  if (resignBtn)    resignBtn.addEventListener('click', cmResignDelegation);
+  if (walletBadge)  walletBadge.addEventListener('click', function() { P87.showModal(); });
+});
+{% endraw %}
+</script>
+</body>
+</html>

@@ -1,0 +1,1680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real Estate Liquidity Hub — COMMAND CENTER</title>
+    <style>
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-card: #111827;
+            --bg-card-hover: #1a2236;
+            --signal-white: #FFFFFF;
+            --muted-slate: #7a8ba7;
+            --label-slate: #5a6a80;
+            --green-glow: #22c55e;
+            --green-soft: rgba(34,197,94,0.15);
+            --amber-glow: #f59e0b;
+            --amber-soft: rgba(245,158,11,0.15);
+            --red-glow: #ef4444;
+            --red-soft: rgba(239,68,68,0.15);
+            --accent-blue: #3b82f6;
+            --border-default: #1e293b;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background: var(--bg-primary);
+            color: var(--signal-white);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .command-center {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+
+        .header-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            margin-bottom: 16px;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-default);
+        }
+
+        .header-bar h1 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .refresh-btn {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 12px;
+            background: transparent;
+            border: 1px solid var(--accent-blue);
+            color: var(--accent-blue);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            transition: all 0.2s ease;
+        }
+        .refresh-btn:hover { background: rgba(59,130,246,0.15); }
+        .refresh-btn:active { transform: scale(0.96); }
+        .refresh-btn.spinning .refresh-icon { animation: spin 0.8s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        .cooldown-countdown-bar {
+            width: 100%;
+            height: 3px;
+            background: #1e293b;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .cooldown-countdown-fill {
+            height: 100%;
+            background: var(--accent-blue);
+            border-radius: 2px;
+            transition: width 1s linear;
+            width: 0%;
+        }
+
+        .header-bar .conn-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8rem;
+            color: var(--muted-slate);
+        }
+
+        .conn-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--green-glow);
+            animation: pulse-dot 2s infinite;
+        }
+        .conn-dot.offline { background: var(--red-glow); }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .grid-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: auto auto auto;
+            gap: 14px;
+        }
+
+        .zone-card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 22px;
+            border: 1.5px solid var(--border-default);
+            transition: border-color 0.6s ease, box-shadow 0.6s ease;
+            position: relative;
+        }
+
+        .zone-card.glow-green {
+            border-color: var(--green-glow);
+            box-shadow: 0 0 20px rgba(34,197,94,0.12), inset 0 0 20px rgba(34,197,94,0.03);
+        }
+        .zone-card.glow-amber {
+            border-color: var(--amber-glow);
+            box-shadow: 0 0 20px rgba(245,158,11,0.12), inset 0 0 20px rgba(245,158,11,0.03);
+        }
+        .zone-card.glow-red {
+            border-color: var(--red-glow);
+            box-shadow: 0 0 25px rgba(239,68,68,0.2), inset 0 0 25px rgba(239,68,68,0.05);
+            animation: pulse-red 1.5s infinite;
+        }
+
+        @keyframes pulse-red {
+            0%, 100% { box-shadow: 0 0 25px rgba(239,68,68,0.2); }
+            50% { box-shadow: 0 0 40px rgba(239,68,68,0.35); }
+        }
+
+        .zone-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--label-slate);
+            margin-bottom: 14px;
+            font-weight: 600;
+        }
+
+        .zone-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--muted-slate);
+            margin-bottom: 4px;
+        }
+
+        .zone-center { grid-column: 1 / -1; }
+
+        /* ZONE 1: Safety Rating */
+        .safety-row {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+
+        .hf-gauge-container {
+            flex: 0 0 auto;
+            position: relative;
+            width: 120px;
+            height: 120px;
+        }
+
+        .hf-gauge-svg {
+            width: 120px;
+            height: 120px;
+            transform: rotate(-90deg);
+        }
+
+        .hf-gauge-bg {
+            fill: none;
+            stroke: #1e293b;
+            stroke-width: 8;
+        }
+
+        .hf-gauge-fill {
+            fill: none;
+            stroke-width: 8;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 1s ease, stroke 0.6s ease;
+        }
+
+        .hf-gauge-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+        }
+
+        .hf-value {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--signal-white);
+            line-height: 1;
+        }
+
+        .hf-sublabel {
+            font-size: 0.6rem;
+            color: var(--muted-slate);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-top: 2px;
+        }
+
+        .safety-info {
+            flex: 1;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+        }
+
+        .status-badge.healthy {
+            background: var(--green-soft);
+            color: var(--green-glow);
+            border: 1px solid rgba(34,197,94,0.3);
+        }
+        .status-badge.caution {
+            background: var(--amber-soft);
+            color: var(--amber-glow);
+            border: 1px solid rgba(245,158,11,0.3);
+        }
+        .status-badge.emergency {
+            background: var(--red-soft);
+            color: var(--red-glow);
+            border: 1px solid rgba(239,68,68,0.3);
+        }
+
+        .safety-detail {
+            font-size: 0.8rem;
+            color: var(--muted-slate);
+            line-height: 1.6;
+        }
+
+        /* ZONE 2: Active Wealth */
+        .wealth-main {
+            font-size: 2.4rem;
+            font-weight: 700;
+            color: var(--signal-white);
+            line-height: 1.1;
+            margin-bottom: 6px;
+        }
+
+        .wealth-change {
+            font-size: 0.95rem;
+            font-weight: 500;
+            margin-bottom: 12px;
+        }
+        .wealth-change.positive { color: var(--green-glow); }
+        .wealth-change.negative { color: var(--red-glow); }
+
+        .wealth-breakdown {
+            display: flex;
+            gap: 24px;
+            margin-top: 10px;
+        }
+
+        .wealth-stat {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .wealth-stat-label {
+            font-size: 0.7rem;
+            color: var(--label-slate);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .wealth-stat-value {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: var(--signal-white);
+        }
+
+        /* ZONE 3: Defensive Guardrails */
+        .guardrails-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .guardrail-card {
+            background: rgba(255,255,255,0.03);
+            border-radius: 10px;
+            padding: 16px;
+            border: 1px solid var(--border-default);
+            position: relative;
+            overflow: hidden;
+        }
+        .guardrail-card.state-safe { border-color: rgba(0,200,100,0.25); }
+        .guardrail-card.state-amber { border-color: rgba(255,170,0,0.35); }
+        .guardrail-card.state-danger { border-color: rgba(255,60,60,0.45); box-shadow: 0 0 12px rgba(255,60,60,0.15); }
+
+        .guardrail-tier {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--label-slate);
+            margin-bottom: 2px;
+        }
+
+        .guardrail-theme-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .guardrail-theme-label.micro { color: rgba(0,200,180,0.9); }
+        .guardrail-theme-label.macro { color: rgba(100,160,255,0.9); }
+
+        .guardrail-context {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px 12px;
+            margin-bottom: 10px;
+        }
+        .guardrail-ctx-label {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--muted-slate);
+        }
+        .guardrail-ctx-value {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--signal-white);
+        }
+
+        .building-wrap {
+            position: relative;
+            height: 80px;
+            margin-bottom: 8px;
+        }
+        .building-frame {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 6px 6px 0 0;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-bottom: 2px solid rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.02);
+            overflow: hidden;
+        }
+        .building-fill {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            transition: height 0.8s ease, background 0.6s ease;
+            border-radius: 4px 4px 0 0;
+        }
+        .building-fill.safe { background: linear-gradient(to top, rgba(0,200,100,0.25), rgba(0,200,100,0.08)); }
+        .building-fill.amber { background: linear-gradient(to top, rgba(255,170,0,0.35), rgba(255,170,0,0.10)); }
+        .building-fill.danger { background: linear-gradient(to top, rgba(255,60,60,0.45), rgba(255,60,60,0.12)); }
+        .building-floors {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column-reverse;
+        }
+        .building-floor-line {
+            flex: 1;
+            border-top: 1px solid rgba(255,255,255,0.05);
+        }
+        .building-icon {
+            position: absolute;
+            top: 4px;
+            right: 6px;
+            font-size: 1.1rem;
+            opacity: 0.5;
+        }
+        .building-pct-label {
+            position: absolute;
+            bottom: 4px;
+            left: 8px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: var(--signal-white);
+            text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+        }
+
+        .guardrail-distance {
+            font-size: 0.72rem;
+            color: var(--muted-slate);
+            margin-bottom: 4px;
+        }
+        .guardrail-distance .dist-value { font-weight: 700; color: var(--signal-white); }
+
+        .guardrail-status {
+            font-size: 0.72rem;
+        }
+        .guardrail-status.armed { color: var(--green-glow); }
+        .guardrail-status.active { color: var(--amber-glow); }
+        .guardrail-status.cooldown { color: var(--muted-slate); font-style: italic; }
+
+        .short-engine-panel {
+            grid-column: 1 / -1;
+            background: rgba(0, 200, 255, 0.04);
+            border: 1px solid rgba(0, 200, 255, 0.15);
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-top: 4px;
+        }
+        .short-engine-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .short-engine-title {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--label-slate);
+        }
+        .short-engine-mode {
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+        .short-engine-mode.sentry {
+            background: rgba(0, 200, 100, 0.15);
+            color: var(--green-glow);
+        }
+        .short-engine-mode.hunter {
+            background: rgba(255, 170, 0, 0.15);
+            color: var(--amber-glow);
+            animation: pulse-glow 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 0.7; }
+            50% { opacity: 1; }
+        }
+        .short-engine-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+        }
+        .short-metric {
+            text-align: center;
+        }
+        .short-metric-label {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--muted-slate);
+            margin-bottom: 2px;
+        }
+        .short-metric-value {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--signal-white);
+        }
+        .short-metric-value.target { color: var(--green-glow); }
+        .short-metric-value.stop { color: #ff4444; }
+        .short-metric-value.distance { color: var(--amber-glow); }
+
+        .guardrails-current {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 10px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 8px;
+            margin-top: 4px;
+        }
+
+        .guardrails-current-label {
+            font-size: 0.7rem;
+            color: var(--label-slate);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .guardrails-current-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--signal-white);
+        }
+
+        /* ZONE 4: Engine Room — Video Avatar Card */
+        #zone4 {
+            padding: 0 !important;
+            overflow: hidden;
+            position: relative;
+        }
+        #zone4 .zone-label {
+            position: absolute;
+            top: 10px;
+            left: 14px;
+            z-index: 10;
+            background: rgba(0,0,0,0.5);
+            padding: 2px 10px;
+            border-radius: 6px;
+        }
+        .avatar-video-wrap {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            min-height: 340px;
+        }
+        .avatar-video-wrap video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            position: absolute;
+            top: 0; left: 0;
+        }
+        .avatar-hud {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(to top, rgba(2,6,23,0.92) 60%, rgba(2,6,23,0.0) 100%);
+            padding: 18px 16px 14px;
+            z-index: 5;
+        }
+        .hud-smart-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .hud-smart-icon {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            flex-shrink: 0;
+        }
+        .hud-smart-icon.eye { background: rgba(56,189,248,0.25); color: #38bdf8; }
+        .hud-smart-icon.battery { background: rgba(250,204,21,0.25); color: #facc15; }
+        .hud-smart-icon.stop { background: rgba(239,68,68,0.25); color: #ef4444; }
+        .hud-smart-icon.crosshair { background: rgba(52,211,153,0.25); color: #34d399; }
+        .hud-smart-icon.power { background: rgba(100,116,139,0.25); color: #64748b; }
+        .hud-smart-text {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--signal-white);
+        }
+        .hud-data-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .hud-data-label {
+            font-size: 0.65rem;
+            color: var(--label-slate);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .hud-data-value {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--signal-white);
+        }
+        .hud-bar-bg {
+            width: 100%;
+            height: 4px;
+            background: rgba(255,255,255,0.08);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 4px 0 8px;
+        }
+        .hud-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 1s ease, background 0.5s ease;
+        }
+        .hud-cooldown-ring {
+            width: 100%;
+            height: 3px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+        .hud-cooldown-ring-fill {
+            height: 100%;
+            background: var(--accent-blue);
+            border-radius: 2px;
+            transition: width 0.5s linear;
+        }
+        .hud-harvest-btn {
+            width: 100%;
+            padding: 5px;
+            border: 1px solid #a78bfa;
+            background: transparent;
+            color: #a78bfa;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            transition: all 0.3s ease;
+        }
+        .hud-harvest-btn:not(:disabled):hover {
+            background: rgba(167,139,250,0.15);
+        }
+        .hud-harvest-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* ZONE 5: Intelligence Feed */
+        .intel-feed {
+            height: 260px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+            font-size: 0.75rem;
+            line-height: 1.7;
+            padding-right: 6px;
+        }
+
+        .intel-feed::-webkit-scrollbar {
+            width: 4px;
+        }
+        .intel-feed::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .intel-feed::-webkit-scrollbar-thumb {
+            background: var(--border-default);
+            border-radius: 2px;
+        }
+
+        .intel-line {
+            padding: 3px 0;
+            color: var(--muted-slate);
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+
+        .intel-line.event-success { color: var(--green-glow); }
+        .intel-line.event-warning { color: var(--amber-glow); }
+        .intel-line.event-error { color: var(--red-glow); }
+        .intel-line.event-trigger { color: var(--accent-blue); }
+        .intel-line.event-idle { color: var(--label-slate); }
+
+        .last-updated {
+            text-align: center;
+            font-size: 0.65rem;
+            color: var(--label-slate);
+            margin-top: 12px;
+            letter-spacing: 0.5px;
+        }
+
+        /* ZONE 6: Real Estate Pipeline */
+        .re-pipeline-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .re-metric-card {
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            padding: 10px 6px;
+            text-align: center;
+            border: 1px solid var(--border-default);
+        }
+        .re-metric-card.re-high { border-color: rgba(34,197,94,0.4); }
+        .re-metric-card.re-med { border-color: rgba(245,158,11,0.4); }
+        .re-metric-card.re-low { border-color: rgba(100,116,139,0.3); }
+        .re-metric-value {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--signal-white);
+        }
+        .re-metric-label {
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--muted-slate);
+            margin-top: 2px;
+        }
+        .re-schedule-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+        }
+        .re-task-pill {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--border-default);
+            color: var(--muted-slate);
+        }
+        .re-task-pill.completed { border-color: rgba(34,197,94,0.4); color: var(--green-glow); }
+        .re-task-pill.running { border-color: rgba(59,130,246,0.5); color: var(--accent-blue); animation: pulse-glow 1.5s infinite; }
+        .re-task-pill.error { border-color: rgba(239,68,68,0.4); color: var(--red-glow); }
+        .re-task-dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: var(--muted-slate);
+        }
+        .re-task-pill.completed .re-task-dot { background: var(--green-glow); }
+        .re-task-pill.running .re-task-dot { background: var(--accent-blue); animation: pulse-dot 1s infinite; }
+        .re-task-pill.error .re-task-dot { background: var(--red-glow); }
+        .re-high-table {
+            margin: 10px 0;
+            max-height: 140px;
+            overflow-y: auto;
+        }
+        .re-high-table table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.62rem;
+        }
+        .re-high-table th {
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-size: 0.55rem;
+            color: var(--muted-slate);
+            padding: 4px 6px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-default);
+            font-weight: 600;
+        }
+        .re-high-table td {
+            padding: 5px 6px;
+            color: var(--signal-white);
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 150px;
+        }
+        .re-high-table tr:hover td {
+            background: rgba(255,255,255,0.03);
+        }
+        .re-high-table .re-equity-val {
+            color: var(--green-glow);
+            font-weight: 600;
+        }
+        .re-high-table .re-doc-link {
+            color: var(--accent-blue);
+            text-decoration: none;
+            font-size: 0.58rem;
+            padding: 2px 5px;
+            border: 1px solid rgba(59,130,246,0.3);
+            border-radius: 4px;
+            margin-right: 3px;
+        }
+        .re-high-table .re-doc-link:hover {
+            background: rgba(59,130,246,0.15);
+        }
+        .re-town-breakdown {
+            margin: 8px 0;
+        }
+        .re-town-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.62rem;
+        }
+        .re-town-table th {
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-size: 0.55rem;
+            color: var(--muted-slate);
+            padding: 3px 6px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-default);
+            font-weight: 600;
+        }
+        .re-town-table td {
+            padding: 4px 6px;
+            color: var(--signal-white);
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+        .re-town-table .re-town-count {
+            font-weight: 600;
+            text-align: center;
+        }
+        .re-town-table .re-doc-link {
+            color: var(--accent-blue);
+            text-decoration: none;
+            font-size: 0.58rem;
+            padding: 2px 5px;
+            border: 1px solid rgba(59,130,246,0.3);
+            border-radius: 4px;
+        }
+        .re-town-table .re-doc-link:hover {
+            background: rgba(59,130,246,0.15);
+        }
+        .re-town-table tr:hover td {
+            background: rgba(255,255,255,0.03);
+        }
+        .re-doc-links {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin: 10px 0 8px;
+        }
+        .re-doc-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 0.62rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            border: 1px solid var(--border-default);
+            background: rgba(255,255,255,0.04);
+            color: var(--accent-blue);
+            cursor: pointer;
+        }
+        .re-doc-btn:hover {
+            background: rgba(59,130,246,0.12);
+            border-color: rgba(59,130,246,0.4);
+        }
+        .re-doc-btn.re-doc-disabled {
+            opacity: 0.35;
+            pointer-events: none;
+            color: var(--muted-slate);
+        }
+        .re-doc-btn.re-doc-active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .re-last-run {
+            font-size: 0.65rem;
+            color: var(--label-slate);
+            text-align: center;
+        }
+
+        @media (max-width: 768px) {
+            .command-center {
+                padding: 8px;
+            }
+            .header-bar {
+                flex-direction: column;
+                gap: 8px;
+                padding: 10px 12px;
+                text-align: center;
+            }
+            .header-bar h1 {
+                font-size: 0.85rem;
+                letter-spacing: 0.3px;
+            }
+            .header-right {
+                width: 100%;
+                justify-content: center;
+                flex-wrap: wrap;
+            }
+            .grid-layout {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            .zone-center { grid-column: 1; }
+            .zone-card {
+                padding: 14px;
+                border-radius: 10px;
+            }
+            .zone-label {
+                font-size: 0.62rem;
+                margin-bottom: 10px;
+            }
+
+            .safety-row {
+                flex-direction: column;
+                gap: 12px;
+                text-align: center;
+            }
+            .hf-gauge-container {
+                width: 100px;
+                height: 100px;
+                margin: 0 auto;
+            }
+            .hf-gauge-svg {
+                width: 100px;
+                height: 100px;
+            }
+            .hf-value { font-size: 1.4rem; }
+            .safety-detail { font-size: 0.72rem; }
+
+            .wealth-main { font-size: 1.6rem; }
+            .wealth-change { font-size: 0.78rem; }
+            .wealth-breakdown {
+                flex-direction: row;
+                gap: 8px;
+            }
+            .wealth-stat-label { font-size: 0.6rem; }
+            .wealth-stat-value { font-size: 0.8rem; }
+
+            .guardrails-grid {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            .guardrail-card { padding: 12px; }
+            .guardrail-context {
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+            }
+            .guardrail-ctx-label { font-size: 0.58rem; }
+            .guardrail-ctx-value { font-size: 0.82rem; }
+            .short-engine-panel {
+                grid-column: 1;
+                padding: 10px 12px;
+            }
+            .short-engine-grid {
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 4px;
+            }
+            .short-metric-value { font-size: 0.85rem; }
+            .guardrails-current { grid-column: 1; }
+
+            .avatar-video-wrap {
+                min-height: 280px;
+            }
+            #zone4 .zone-label {
+                font-size: 0.58rem;
+                top: 6px;
+                left: 8px;
+                padding: 2px 8px;
+            }
+            .hud-smart-text {
+                font-size: 0.62rem;
+                letter-spacing: 1px;
+            }
+
+            .re-pipeline-grid {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 6px;
+            }
+            .re-metric-value { font-size: 1rem; }
+            .re-metric-label { font-size: 0.55rem; }
+            .re-schedule-row { gap: 4px; }
+            .re-task-pill { font-size: 0.58rem; padding: 3px 7px; }
+
+            .intel-feed {
+                height: 200px;
+                font-size: 0.68rem;
+                line-height: 1.6;
+            }
+
+            .last-updated {
+                font-size: 0.58rem;
+            }
+        }
+
+        @media (max-width: 400px) {
+            .command-center { padding: 4px; }
+            .header-bar h1 { font-size: 0.72rem; }
+            .wealth-main { font-size: 1.3rem; }
+            .zone-card { padding: 10px; }
+            .avatar-video-wrap { min-height: 240px; }
+            .hf-gauge-container { width: 80px; height: 80px; }
+            .hf-gauge-svg { width: 80px; height: 80px; }
+            .guardrail-context { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="command-center">
+        <div class="header-bar">
+            <h1>REAL ESTATE LIQUIDITY HUB — COMMAND CENTER</h1>
+            <div class="header-right">
+                <button class="refresh-btn" id="refreshBtn">
+                    <span class="refresh-icon">&#x21bb;</span> REFRESH
+                </button>
+                <div class="conn-badge">
+                    <div class="conn-dot" id="connDot"></div>
+                    <span id="connText">Connecting...</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid-layout">
+            <!-- ZONE 4: Engine Room — Video Avatar Card -->
+            <div class="zone-card" id="zone4">
+                <div class="zone-label">Zone 4 — Engine Room</div>
+                <div class="avatar-video-wrap">
+                    <video id="avatarVideo" muted playsinline autoplay loop src="/static/assets/avatar_idle.mp4"></video>
+                    <div class="avatar-hud">
+                        <div class="hud-cooldown-ring">
+                            <div class="hud-cooldown-ring-fill" id="hudCooldownRing" style="width:0%"></div>
+                        </div>
+                        <div class="hud-smart-status">
+                            <div class="hud-smart-icon eye" id="hudIcon">👁️</div>
+                            <div class="hud-smart-text" id="hudSmartText">SENTINEL: SCANNING MARKET...</div>
+                        </div>
+                        <div class="hud-data-row">
+                            <span class="hud-data-label">Capacity</span>
+                            <span class="hud-data-value" id="hudCapacity">$0.00</span>
+                        </div>
+                        <div class="hud-bar-bg">
+                            <div class="hud-bar-fill" id="hudCapBar" style="width:0%;background:var(--green-glow)"></div>
+                        </div>
+                        <div class="hud-data-row">
+                            <span class="hud-data-label">USDC → WALLET_B</span>
+                            <span class="hud-data-value" id="hudUsdc">0.00 / 22.00</span>
+                        </div>
+                        <div class="hud-bar-bg">
+                            <div class="hud-bar-fill" id="hudUsdcBar" style="width:0%;background:#2775ca"></div>
+                        </div>
+                        <div class="hud-data-row" style="margin-top:4px;">
+                            <span class="hud-data-label" style="font-size:0.65rem;opacity:0.7">WALLET_B</span>
+                            <span class="hud-data-value" id="hudWalletB" style="font-size:0.65rem;opacity:0.7">Loading...</span>
+                        </div>
+                        <div class="hud-data-row" style="margin-top:4px;">
+                            <span class="hud-data-label" style="font-size:0.65rem;opacity:0.8">Yield (24h)</span>
+                            <span class="hud-data-value" id="hudYieldStats" style="font-size:0.65rem;opacity:0.8;color:#2775ca">0 Flushes | $0.00</span>
+                        </div>
+                        <button id="injectBtn" class="hud-harvest-btn" disabled>INJECT LIQUIDITY</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ZONE 2: Active Wealth -->
+            <div class="zone-card" id="zone2">
+                <div class="zone-label">Zone 2 — Active Wealth</div>
+                <div class="wealth-main" id="totalValue">$—</div>
+                <div class="wealth-change positive" id="valueChange">Calculating...</div>
+                <div class="wealth-breakdown">
+                    <div class="wealth-stat">
+                        <span class="wealth-stat-label">Collateral</span>
+                        <span class="wealth-stat-value" id="collateralVal">$—</span>
+                    </div>
+                    <div class="wealth-stat">
+                        <span class="wealth-stat-label">Debt</span>
+                        <span class="wealth-stat-value" id="debtVal">$—</span>
+                    </div>
+                    <div class="wealth-stat">
+                        <span class="wealth-stat-label">Available</span>
+                        <span class="wealth-stat-value" id="availVal">$—</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ZONE 1: Safety Rating -->
+            <div class="zone-card" id="zone1">
+                <div class="zone-label">Zone 1 — Safety Anchor</div>
+                <div class="safety-row">
+                    <div class="hf-gauge-container">
+                        <svg class="hf-gauge-svg" viewBox="0 0 120 120">
+                            <circle class="hf-gauge-bg" cx="60" cy="60" r="50" />
+                            <circle class="hf-gauge-fill" id="hfGaugeFill" cx="60" cy="60" r="50"
+                                stroke-dasharray="314.16"
+                                stroke-dashoffset="314.16" />
+                        </svg>
+                        <div class="hf-gauge-text">
+                            <div class="hf-value" id="hfValue">—</div>
+                            <div class="hf-sublabel">Safety Rating</div>
+                        </div>
+                    </div>
+                    <div class="safety-info">
+                        <div class="status-badge" id="statusBadge">
+                            <span id="statusIcon">⏳</span>
+                            <span id="statusText">LOADING</span>
+                        </div>
+                        <div class="safety-detail" id="safetyDetail">
+                            Initializing safety monitoring...
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ZONE 3: Defensive Guardrails (full-width) -->
+            <div class="zone-card zone-center" id="zone3">
+                <div class="zone-label">Zone 3 — Defensive Guardrails · Velocity Targets</div>
+                <div class="guardrails-grid">
+                    <div class="guardrail-card state-safe" id="microCard">
+                        <div class="guardrail-tier">Target 1 — Micro Defense</div>
+                        <div class="guardrail-theme-label micro">Front-door Defense · $30 / 20min</div>
+                        <div class="guardrail-context">
+                            <div><span class="guardrail-ctx-label">Portfolio</span><br><span class="guardrail-ctx-value" id="microCurrentVal">$—</span></div>
+                            <div><span class="guardrail-ctx-label">Window High</span><br><span class="guardrail-ctx-value" id="microWindowHigh">$—</span></div>
+                            <div><span class="guardrail-ctx-label">Drop So Far</span><br><span class="guardrail-ctx-value" id="microDropSoFar">$0.00</span></div>
+                            <div><span class="guardrail-ctx-label">Drop Needed</span><br><span class="guardrail-ctx-value" id="microDropNeeded">$30.00</span></div>
+                        </div>
+                        <div class="building-wrap">
+                            <div class="building-frame">
+                                <div class="building-fill safe" id="microBuildingFill" style="height:0%"></div>
+                                <div class="building-floors">
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                </div>
+                                <span class="building-icon">🏠</span>
+                                <span class="building-pct-label" id="microPctLabel">0%</span>
+                            </div>
+                        </div>
+                        <div class="guardrail-distance" id="microDistance">Distance: <span class="dist-value">0%</span> to Micro Defense trigger</div>
+                        <div class="guardrail-status armed" id="microStatus">ARMED — Monitoring</div>
+                    </div>
+                    <div class="guardrail-card state-safe" id="macroCard">
+                        <div class="guardrail-tier">Target 2 — Macro Hedge</div>
+                        <div class="guardrail-theme-label macro">Storm-shutter Hedge · $50 / 30min</div>
+                        <div class="guardrail-context">
+                            <div><span class="guardrail-ctx-label">Portfolio</span><br><span class="guardrail-ctx-value" id="macroCurrentVal">$—</span></div>
+                            <div><span class="guardrail-ctx-label">Window High</span><br><span class="guardrail-ctx-value" id="macroWindowHigh">$—</span></div>
+                            <div><span class="guardrail-ctx-label">Drop So Far</span><br><span class="guardrail-ctx-value" id="macroDropSoFar">$0.00</span></div>
+                            <div><span class="guardrail-ctx-label">Drop Needed</span><br><span class="guardrail-ctx-value" id="macroDropNeeded">$50.00</span></div>
+                        </div>
+                        <div class="building-wrap">
+                            <div class="building-frame">
+                                <div class="building-fill safe" id="macroBuildingFill" style="height:0%"></div>
+                                <div class="building-floors">
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                    <div class="building-floor-line"></div>
+                                </div>
+                                <span class="building-icon">🏢</span>
+                                <span class="building-pct-label" id="macroPctLabel">0%</span>
+                            </div>
+                        </div>
+                        <div class="guardrail-distance" id="macroDistance">Distance: <span class="dist-value">0%</span> to Storm-shutter trigger</div>
+                        <div class="guardrail-status armed" id="macroStatus">ARMED — Monitoring</div>
+                    </div>
+                    <div class="short-engine-panel" id="shortEnginePanel">
+                        <div class="short-engine-header">
+                            <span class="short-engine-title">Phase 2 — Target Profit Engine</span>
+                            <span class="short-engine-mode sentry" id="shortMode">SENTRY 90s</span>
+                        </div>
+                        <div class="short-engine-grid">
+                            <div class="short-metric">
+                                <div class="short-metric-label">Target Price</div>
+                                <div class="short-metric-value target" id="shortTarget">--</div>
+                            </div>
+                            <div class="short-metric">
+                                <div class="short-metric-label">Stop Loss</div>
+                                <div class="short-metric-value stop" id="shortStop">--</div>
+                            </div>
+                            <div class="short-metric">
+                                <div class="short-metric-label">Distance</div>
+                                <div class="short-metric-value distance" id="shortDistance">--</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="guardrails-current">
+                        <div class="guardrails-current-label">Current Market Position</div>
+                        <div class="guardrails-current-value" id="currentCollateral">$—</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ZONE 6: Real Estate Pipeline -->
+            <div class="zone-card zone-center" id="zone6">
+                <div class="zone-label">Zone 6 — Real Estate Pipeline (5 Towns)</div>
+                <div class="re-pipeline-grid">
+                    <div class="re-metric-card">
+                        <div class="re-metric-value" id="reFilings">0</div>
+                        <div class="re-metric-label">Filings (30d)</div>
+                    </div>
+                    <div class="re-metric-card re-high">
+                        <div class="re-metric-value" id="reHigh">0</div>
+                        <div class="re-metric-label">HIGH</div>
+                    </div>
+                    <div class="re-metric-card re-med">
+                        <div class="re-metric-value" id="reMed">0</div>
+                        <div class="re-metric-label">MED</div>
+                    </div>
+                    <div class="re-metric-card re-low">
+                        <div class="re-metric-value" id="reLow">0</div>
+                        <div class="re-metric-label">LOW</div>
+                    </div>
+                    <div class="re-metric-card">
+                        <div class="re-metric-value" id="reReviews">0</div>
+                        <div class="re-metric-label">Reviews</div>
+                    </div>
+                    <div class="re-metric-card">
+                        <div class="re-metric-value" id="reLetters">0</div>
+                        <div class="re-metric-label">Letters</div>
+                    </div>
+                </div>
+
+                <div class="re-town-breakdown" id="reTownBreakdown"></div>
+
+                <div class="re-high-table" id="reHighTable"></div>
+
+                <div class="re-schedule-row">
+                    <div class="re-task-pill" id="reTask1"><span class="re-task-dot"></span>7:00 Scrape</div>
+                    <div class="re-task-pill" id="reTask2"><span class="re-task-dot"></span>7:30 Analysis</div>
+                    <div class="re-task-pill" id="reTask3"><span class="re-task-dot"></span>8:00 Reviews</div>
+                    <div class="re-task-pill" id="reTask4"><span class="re-task-dot"></span>8:30 Outreach</div>
+                </div>
+
+                <div class="re-doc-links" id="reDocLinks">
+                    <a class="re-doc-btn re-doc-disabled" id="reLogicBtn" target="_blank" rel="noopener">LOGIC Doc</a>
+                    <a class="re-doc-btn re-doc-disabled" id="reRawBtn" target="_blank" rel="noopener">Raw Data</a>
+                    <a class="re-doc-btn re-doc-disabled" id="reDriveBtn" target="_blank" rel="noopener">Drive Folder</a>
+                </div>
+
+                <div class="re-last-run" id="reLastRun">Pipeline idle — awaiting next scheduled run</div>
+            </div>
+
+            <!-- ZONE 5: Intelligence Feed -->
+            <div class="zone-card" id="zone5">
+                <div class="zone-label">Zone 5 — Intelligence Feed</div>
+                <div class="intel-feed" id="intelFeed">
+                    <div class="intel-line event-idle">Connecting to intelligence stream...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="last-updated" id="lastUpdated">Awaiting first data cycle...</div>
+    </div>
+
+    <script nonce="{{ csp_nonce }}">
+        let refreshInterval = null;
+        let lastData = null;
+        let growthCooldownSec = 0;
+        let lsCooldownSec = 0;
+        let cooldownTickInterval = null;
+        const COOLDOWN_MAX = 130;
+
+        function applyGlowClass(el, hfStatus) {
+            el.classList.remove('glow-green', 'glow-amber', 'glow-red');
+            if (hfStatus === 'HEALTHY') el.classList.add('glow-green');
+            else if (hfStatus === 'CAUTION') el.classList.add('glow-amber');
+            else el.classList.add('glow-red');
+        }
+
+        async function manualRefresh() {
+            const btn = document.getElementById('refreshBtn');
+            btn.classList.add('spinning');
+            btn.disabled = true;
+            try {
+                const resp = await fetch('/api/command-center?force_refresh=true');
+                if (!resp.ok) throw new Error('API error');
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.error || 'Unknown error');
+                lastData = data;
+                renderData(data);
+                document.getElementById('connDot').classList.remove('offline');
+                document.getElementById('connText').textContent = 'Live · Arbitrum Mainnet';
+                document.getElementById('lastUpdated').textContent = 'Manual refresh: ' + new Date().toLocaleTimeString('en-US', {timeZone: 'America/New_York'}) + ' EST · Fresh on-chain data';
+            } catch (err) {
+                console.error('Manual refresh error:', err);
+                document.getElementById('lastUpdated').textContent = 'Refresh failed: ' + err.message;
+            }
+            setTimeout(() => {
+                btn.classList.remove('spinning');
+                btn.disabled = false;
+            }, 1000);
+        }
+
+        let currentAvatarSrc = 'idle';
+        function updateAvatarState(z4) {
+            const er = z4.engine_room || {};
+            const wantSrc = er.avatar_video || 'idle';
+            if (wantSrc !== currentAvatarSrc) {
+                const vid = document.getElementById('avatarVideo');
+                vid.src = '/static/assets/avatar_' + wantSrc + '.mp4';
+                vid.load();
+                vid.play().catch(()=>{});
+                currentAvatarSrc = wantSrc;
+            }
+        }
+
+        function updateHUD(z4) {
+            const er = z4.engine_room || {};
+            const iconMap = {eye:'👁️', battery:'🔋', stop:'🛑', crosshair:'🎯', power:'⚡'};
+            const iconClassMap = {eye:'eye', battery:'battery', stop:'stop', crosshair:'crosshair', power:'power'};
+            const smartIcon = er.smart_icon || 'eye';
+            const hudIconEl = document.getElementById('hudIcon');
+            hudIconEl.textContent = iconMap[smartIcon] || '👁️';
+            hudIconEl.className = 'hud-smart-icon ' + (iconClassMap[smartIcon] || 'eye');
+            document.getElementById('hudSmartText').textContent = er.smart_text || 'SENTINEL: SCANNING MARKET...';
+
+            const cdRem = er.cooldown_remaining || 0;
+            const cdTotal = er.cooldown_total || 130;
+            const cdPct = cdTotal > 0 ? Math.min(((cdTotal - cdRem) / cdTotal) * 100, 100) : 0;
+            document.getElementById('hudCooldownRing').style.width = (cdRem > 0 ? cdPct : 0) + '%';
+
+            const avail = z4.available_borrows || 0;
+            const cap = z4.borrow_capacity || z4.capacity_cap || 1;
+            const debt = z4.total_debt || 0;
+            const pct = cap > 0 ? Math.min((debt / cap) * 100, 100) : 0;
+            document.getElementById('hudCapacity').textContent = '$' + avail.toFixed(2) + ' avail';
+            const capBar = document.getElementById('hudCapBar');
+            capBar.style.width = pct + '%';
+            if (pct > 80) capBar.style.background = 'var(--red-glow)';
+            else if (pct > 50) capBar.style.background = 'var(--amber-glow)';
+            else capBar.style.background = 'var(--green-glow)';
+
+            const usdcBal = z4.usdc_balance || 0;
+            const usdcTgt = z4.usdc_target || 22.0;
+            const usdcPct = usdcTgt > 0 ? Math.min((usdcBal / usdcTgt) * 100, 100) : 0;
+            document.getElementById('hudUsdc').textContent = '$' + usdcBal.toFixed(2) + ' / $' + usdcTgt.toFixed(2);
+            document.getElementById('hudUsdcBar').style.width = usdcPct + '%';
+            document.getElementById('hudWalletB').textContent = z4.wallet_b || 'Not Set';
+
+            const yieldStats = z4.yield_stats || {};
+            const y24count = yieldStats.last_24h_count || 0;
+            const y24total = yieldStats.last_24h_total || 0;
+            document.getElementById('hudYieldStats').textContent = y24count + ' Flushes | $' + y24total.toFixed(2) + ' Total';
+
+            const inj = z4.injection_estimate || {};
+            const injBtn = document.getElementById('injectBtn');
+            if (inj.ratio_safe) {
+                injBtn.disabled = false;
+                if (inj.test_mode) {
+                    injBtn.textContent = 'TEST INJECTION ($' + (inj.injection_amount || 11).toFixed(2) + ')';
+                } else {
+                    injBtn.textContent = 'INJECT LIQUIDITY ($' + (inj.injection_amount || 0).toFixed(2) + ')';
+                }
+            } else {
+                injBtn.disabled = true;
+                injBtn.textContent = 'INJECTION LOCKED (' + ((inj.availability_ratio || 0) * 100).toFixed(0) + '% < 52%)';
+            }
+        }
+
+        async function sendUsdcToWalletB() {
+            try {
+                const resp = await fetch('/api/send-usdc-to-wallet-b', { method: 'POST' });
+                const data = await resp.json();
+                alert(data.message || data.error || 'USDC transfer request sent');
+            } catch (err) {
+                alert('USDC transfer failed: ' + err.message);
+            }
+        }
+
+        async function injectLiquidity() {
+            const btn = document.getElementById('injectBtn');
+            const origText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'INJECTING...';
+            try {
+                const resp = await fetch('/api/inject_liquidity', { method: 'POST' });
+                const data = await resp.json();
+                if (data.success) {
+                    alert('Injection successful: ' + data.message);
+                } else {
+                    alert('Injection failed: ' + (data.error || 'Unknown error'));
+                }
+                fetchCommandCenter();
+            } catch (err) {
+                alert('Injection error: ' + err.message);
+            }
+            btn.disabled = false;
+            btn.textContent = origText;
+        }
+
+        function updateGauge(hf) {
+            const maxHF = 5.0;
+            const pct = Math.min(hf / maxHF, 1.0);
+            const circumference = 314.16;
+            const offset = circumference * (1 - pct);
+            const fill = document.getElementById('hfGaugeFill');
+            fill.style.strokeDashoffset = offset;
+
+            if (hf > 3.10) fill.style.stroke = 'var(--green-glow)';
+            else if (hf >= 2.90) fill.style.stroke = 'var(--amber-glow)';
+            else fill.style.stroke = 'var(--red-glow)';
+        }
+
+        function classifyIntelLine(text) {
+            const t = text.toUpperCase();
+            if (t.includes('SUCCESS') || t.includes('STRENGTHENED') || t.includes('RECOVERY SUCCESS')) return 'event-success';
+            if (t.includes('EMERGENCY') || t.includes('FAILED') || t.includes('ERROR')) return 'event-error';
+            if (t.includes('TRIGGER') || t.includes('ACTIVATED') || t.includes('DEFENSE') || t.includes('HEDGE')) return 'event-trigger';
+            if (t.includes('CAUTION') || t.includes('WARNING') || t.includes('BLOCKED')) return 'event-warning';
+            if (t.includes('IDLE') || t.includes('MONITORING')) return 'event-idle';
+            return '';
+        }
+
+        function formatCooldown(seconds) {
+            if (seconds <= 0) return 'Ready';
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return m > 0 ? `${m}m ${s}s` : `${s}s`;
+        }
+
+        async function fetchCommandCenter() {
+            try {
+                const resp = await fetch('/api/command-center');
+                if (!resp.ok) throw new Error('API error');
+                const data = await resp.json();
+                if (!data.success) throw new Error(data.error || 'Unknown error');
+                lastData = data;
+                renderData(data);
+
+                document.getElementById('connDot').classList.remove('offline');
+                document.getElementById('connText').textContent = 'Live · Arbitrum Mainnet';
+            } catch (err) {
+                console.error('Fetch error:', err);
+                document.getElementById('connDot').classList.add('offline');
+                document.getElementById('connText').textContent = 'Reconnecting...';
+            }
+        }
+
+        function renderData(data) {
+            const z1 = data.zone1_safety;
+            const z2 = data.zone2_wealth;
+            const z3 = data.zone3_guardrails;
+            const z4 = data.zone4_engine;
+            const z5 = data.zone5_intel;
+            const hf = z1.health_factor;
+            const hfStatus = z1.hf_status;
+
+            // ZONE 1: Safety Rating
+            document.getElementById('hfValue').textContent = hf.toFixed(2);
+            updateGauge(hf);
+            applyGlowClass(document.getElementById('zone1'), hfStatus);
+
+            const badge = document.getElementById('statusBadge');
+            badge.className = 'status-badge';
+            const icon = document.getElementById('statusIcon');
+            const text = document.getElementById('statusText');
+            if (hfStatus === 'HEALTHY') {
+                badge.classList.add('healthy');
+                icon.textContent = '🟢';
+                text.textContent = 'SYSTEM HEALTHY';
+            } else if (hfStatus === 'CAUTION') {
+                badge.classList.add('caution');
+                icon.textContent = '🟡';
+                text.textContent = 'CAUTION';
+            } else {
+                badge.classList.add('emergency');
+                icon.textContent = '🔴';
+                text.textContent = 'EMERGENCY';
+            }
+
+            const detail = document.getElementById('safetyDetail');
+            if (hfStatus === 'HEALTHY') detail.textContent = `Safety Rating ${hf.toFixed(2)} — All systems operating normally. USDC Tax mode active.`;
+            else if (hfStatus === 'CAUTION') detail.textContent = `Safety Rating ${hf.toFixed(2)} — Approaching threshold. Growth operations paused until rating improves above 3.10.`;
+            else detail.textContent = `Safety Rating ${hf.toFixed(2)} — Below safe threshold. Emergency protocols active. Waiting for rating recovery above 2.90.`;
+
+            // ZONE 2: Active Wealth
+            document.getElementById('totalValue').textContent = '$' + z2.net_value_usd.toFixed(2);
+            const changeEl = document.getElementById('valueChange');
+            const sign = z2.change_24h_usd >= 0 ? '+' : '';
+            changeEl.textContent = `${sign}$${z2.change_24h_usd.toFixed(2)} (${sign}${z2.change_24h_pct.toFixed(1)}%) from baseline`;
+            changeEl.className = 'wealth-change ' + (z2.change_24h_usd >= 0 ? 'positive' : 'negative');
+            document.getElementById('collateralVal').textContent = '$' + z2.total_value_usd.toFixed(2);
+            document.getElementById('debtVal').textContent = '$' + z2.total_debt_usd.toFixed(2);
+            document.getElementById('availVal').textContent = '$' + (data.zone4_engine.available_borrows || 0).toFixed(2);
+
+            // ZONE 3: Defensive Guardrails — Building Visualization
+            applyGlowClass(document.getElementById('zone3'), hfStatus);
+            const collateral = z3.current_collateral || 0;
+            const bufSize = z3.velocity_buffer_size || 0;
+            document.getElementById('currentCollateral').textContent = '$' + collateral.toFixed(2) + ' [' + bufSize + ' samples]';
+
+            function updateBuildingTarget(prefix, t, tierLabel, triggerName) {
+                const pct = t.progress_pct || 0;
+                const dropSoFar = t.dollar_drop_so_far || 0;
+                const dropRemaining = t.dollar_drop_remaining || 0;
+                const dropRequired = t.dollar_drop_required || 1;
+                const windowHigh = t.window_high || 0;
+                const currentVal = t.current_value || 0;
+                const onCooldown = t.on_cooldown || false;
+
+                document.getElementById(prefix + 'CurrentVal').textContent = '$' + currentVal.toFixed(2);
+                document.getElementById(prefix + 'WindowHigh').textContent = '$' + windowHigh.toFixed(2);
+                document.getElementById(prefix + 'DropSoFar').textContent = '$' + dropSoFar.toFixed(2);
+                document.getElementById(prefix + 'DropNeeded').textContent = '$' + dropRemaining.toFixed(2);
+
+                const fill = document.getElementById(prefix + 'BuildingFill');
+                fill.style.height = Math.min(100, pct) + '%';
+                let colorClass = 'safe';
+                let stateClass = 'state-safe';
+                if (pct >= 90) { colorClass = 'danger'; stateClass = 'state-danger'; }
+                else if (pct >= 50) { colorClass = 'amber'; stateClass = 'state-amber'; }
+                fill.className = 'building-fill ' + colorClass;
+
+                const card = document.getElementById(prefix + 'Card');
+                card.className = 'guardrail-card ' + stateClass;
+
+                document.getElementById(prefix + 'PctLabel').textContent = pct.toFixed(0) + '%';
+
+                const distEl = document.getElementById(prefix + 'Distance');
+                distEl.innerHTML = 'Distance: <span class="dist-value">' + pct.toFixed(0) + '%</span> to ' + triggerName + ' trigger';
+
+                const statusEl = document.getElementById(prefix + 'Status');
+                if (onCooldown) {
+                    statusEl.textContent = 'COOLDOWN — Recovering';
+                    statusEl.className = 'guardrail-status cooldown';
+                } else if (z3.has_active_position && (z3.position_tier || '').toUpperCase() === tierLabel) {
+                    statusEl.textContent = 'ACTIVE — Position Open';
+                    statusEl.className = 'guardrail-status active';
+                } else {
+                    statusEl.textContent = 'ARMED — Monitoring';
+                    statusEl.className = 'guardrail-status armed';
+                }
+            }
+
+            const microT = z3.micro || {};
+            const macroT = z3.macro || {};
+            updateBuildingTarget('micro', microT, 'MICRO', 'Micro Defense');
+            updateBuildingTarget('macro', macroT, 'MACRO', 'Storm-shutter');
+
+            const se = z3.short_engine || {};
+            const modeEl = document.getElementById('shortMode');
+            const pollInt = se.polling_interval || 90;
+            if (se.polling_mode === 'HUNTER') {
+                modeEl.textContent = 'HUNTER ' + pollInt + 's';
+                modeEl.className = 'short-engine-mode hunter';
+            } else {
+                modeEl.textContent = 'SENTRY ' + pollInt + 's';
+                modeEl.className = 'short-engine-mode sentry';
+            }
+            document.getElementById('shortTarget').textContent = se.target_price ? '$' + Number(se.target_price).toFixed(2) : '--';
+            document.getElementById('shortStop').textContent = se.stop_loss_price ? '$' + Number(se.stop_loss_price).toFixed(2) : '--';
+            if (se.distance_to_target_pct != null) {
+                document.getElementById('shortDistance').textContent = Number(se.distance_to_target_pct).toFixed(1) + '%';
+            } else {
+                document.getElementById('shortDistance').textContent = (se.position_status || 'IDLE') === 'IDLE' ? 'IDLE' : '--';
+            }
+
+            // ZONE 4: Engine Room — Video Avatar + HUD
+            updateAvatarState(z4);
+            updateHUD(z4);
+
+            // ZONE 6: Real Estate Pipeline (Multi-Town)
+            const z6 = data.zone6_real_estate || {};
+            document.getElementById('reFilings').textContent = z6.filings_today || 0;
+            document.getElementById('reHigh').textContent = z6.leads_high || 0;
+            document.getElementById('reMed').textContent = z6.leads_med || 0;
+            document.getElementById('reLow').textContent = z6.leads_low || 0;
+            document.getElementById('reReviews').textContent = z6.reviews_generated || 0;
+            document.getElementById('reLetters').textContent = z6.letters_queued || 0;
+
+            const townBreakdown = document.getElementById('reTownBreakdown');
+            const filingsByTown = z6.filings_by_town || {};
+            const analysisDocs = z6.analysis_docs || [];
+            const townNames = Object.keys(filingsByTown);
+            if (townNames.length > 0 || analysisDocs.length > 0) {
+                let tbHtml = '<table class="re-town-table"><thead><tr><th>Town</th><th>Filings</th><th>Analysis</th></tr></thead><tbody>';
+                const allTowns = ['Hartford', 'East Hartford', 'Windsor', 'Berlin', 'Rocky Hill'];
+                allTowns.forEach(town => {
+                    const count = filingsByTown[town] !== undefined ? filingsByTown[town] : '--';
+                    const townDoc = analysisDocs.find(d => d.town === town);
+                    let link = '--';
+                    if (townDoc && townDoc.url) {
+                        link = '<a class="re-doc-link" href="' + townDoc.url + '" target="_blank">View</a>';
+                    }
+                    tbHtml += '<tr><td>' + town + '</td><td class="re-town-count">' + count + '</td><td>' + link + '</td></tr>';
+                });
+                tbHtml += '</tbody></table>';
+                townBreakdown.innerHTML = tbHtml;
+            } else {
+                townBreakdown.innerHTML = '';
+            }
+
+            const highTable = document.getElementById('reHighTable');
+            const highLeads = z6.high_leads || [];
+            if (highLeads.length > 0) {
+                let tableHtml = '<table><thead><tr><th>Town</th><th>Address</th><th>Equity</th><th>Case</th><th>Return</th><th>Docs</th></tr></thead><tbody>';
+                highLeads.forEach(lead => {
+                    const addr = lead.address || 'Unknown';
+                    const shortAddr = addr.length > 24 ? addr.slice(0, 22) + '...' : addr;
+                    const town = lead.town || '--';
+                    const equity = lead.equity ? '$' + Math.round(lead.equity).toLocaleString() : '--';
+                    const caseNum = lead.court_case || '--';
+                    const retDate = lead.return_date || '--';
+                    let docLinks = '';
+                    if (lead.review_url) docLinks += '<a class="re-doc-link" href="' + lead.review_url + '" target="_blank">R</a>';
+                    if (lead.letters_url) docLinks += '<a class="re-doc-link" href="' + lead.letters_url + '" target="_blank">L</a>';
+                    if (!docLinks) docLinks = '--';
+                    tableHtml += '<tr><td>' + town + '</td><td title="' + addr + '">' + shortAddr + '</td><td class="re-equity-val">' + equity + '</td><td>' + caseNum + '</td><td>' + retDate + '</td><td>' + docLinks + '</td></tr>';
+                });
+                tableHtml += '</tbody></table>';
+                highTable.innerHTML = tableHtml;
+            } else {
+                highTable.innerHTML = '';
+            }
+
+            function setDocBtn(id, url) {
+                const btn = document.getElementById(id);
+                if (url) {
+                    btn.href = url;
+                    btn.classList.remove('re-doc-disabled');
+                    btn.classList.add('re-doc-active');
+                } else {
+                    btn.removeAttribute('href');
+                    btn.classList.add('re-doc-disabled');
+                    btn.classList.remove('re-doc-active');
+                }
+            }
+            setDocBtn('reLogicBtn', z6.logic_doc_url);
+            setDocBtn('reRawBtn', z6.raw_data_sheet_url);
+            setDocBtn('reDriveBtn', z6.drive_folder_url);
+
+            const taskPills = [
+                {el: document.getElementById('reTask1'), key: 'last_ingest'},
+                {el: document.getElementById('reTask2'), key: 'last_analysis'},
+                {el: document.getElementById('reTask3'), key: 'last_reviews'},
+                {el: document.getElementById('reTask4'), key: 'last_outreach'},
+            ];
+            const todayStr = new Date().toISOString().slice(0, 10);
+            taskPills.forEach(tp => {
+                tp.el.classList.remove('completed', 'running', 'error');
+                const lastRun = z6[tp.key];
+                if (lastRun && lastRun.includes(todayStr)) {
+                    tp.el.classList.add('completed');
+                }
+            });
+
+            let reStatus = 'Pipeline idle';
+            if (z6.last_outreach && z6.last_outreach.includes(todayStr)) reStatus = 'All 4 tasks completed today';
+            else if (z6.last_ingest && z6.last_ingest.includes(todayStr)) reStatus = 'Pipeline running — next task pending';
+            const reLastEl = document.getElementById('reLastRun');
+            reLastEl.textContent = reStatus + (z6.last_ingest ? ' | Last scrape: ' + z6.last_ingest.slice(11, 16) + ' ET' : '');
+
+            // ZONE 5: Intelligence Feed
+            const feed = document.getElementById('intelFeed');
+            if (z5.lines && z5.lines.length > 0) {
+                feed.innerHTML = '';
+                z5.lines.forEach(line => {
+                    const div = document.createElement('div');
+                    div.className = 'intel-line ' + classifyIntelLine(line);
+                    div.textContent = line;
+                    feed.appendChild(div);
+                });
+                feed.scrollTop = feed.scrollHeight;
+            }
+
+            // Timestamp
+            const now = new Date();
+            document.getElementById('lastUpdated').textContent = 'Last updated: ' + now.toLocaleTimeString('en-US', {timeZone: 'America/New_York'}) + ' EST · Data age: ' + Math.round((Date.now()/1000 - data.timestamp)) + 's';
+        }
+
+        document.getElementById('refreshBtn').addEventListener('click', manualRefresh);
+        document.getElementById('injectBtn').addEventListener('click', injectLiquidity);
+
+        fetchCommandCenter();
+        refreshInterval = setInterval(fetchCommandCenter, 5000);
+    </script>
+</body>
+</html>

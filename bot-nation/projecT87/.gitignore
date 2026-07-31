@@ -1,0 +1,50 @@
+# projecT87 — vendored native service under bot-nation.
+# Blacklist style (replaces upstream whitelist): track the vendored source,
+# block secrets + the runtime noise that was pruned during vendoring.
+
+# Secrets / local env
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+*.egg-info/
+.pythonlibs/
+.upm/
+.cache/
+.local/
+
+# Runtime diagnostics / logs / dumps (pruned during vendoring — do not re-add)
+*.log
+*diagnostic*.json
+*forensic*.json
+borrow_failure_*.json
+borrow_diagnostic_*.json
+borrow_success_*.json
+complete_debt_swap_cycle_*.json
+final_*_cycle_*.json
+onchain_debt_swap_test_*.json
+extracted_transactions_*.json
+debt_swap_execution_*.json
+*_results_*.json
+*test_result*.json
+*evidence*.json
+*snapshot*.json
+performance_log.json
+improvement_log.json
+improvement_queue.json
+active_swaps.json
+api_usage_tracking.json
+state_*.json
+*.lock
+*.backup_*
+*.flag
+
+# Large media / uploaded assets
+attached_assets/

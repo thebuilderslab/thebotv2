@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>PROJECT 87 — FIELD OPS</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%23050a0f' stroke='%2300e5ff' stroke-width='2'/><text x='16' y='21' text-anchor='middle' font-size='14' fill='%2300e5ff' font-family='monospace'>87</text></svg>">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/mobile_dashboard.css">
+</head>
+<body>
+
+<div id="cm-modal">
+
+  <div id="cm-connect-phase" class="cm-phase">
+    <div class="cm-logo"><img src="/static/logo_p87.png" alt="PROJECT 87" class="cm-logo-gif"></div>
+    <div class="cm-wordmark">PROJECT 87</div>
+    <div class="cm-hero-sub">IAAS DEFI PLATFORM</div>
+    <p class="lp-desc lp-desc--hero">
+      Project 87 is an autonomous liquidity engine that borrows against your ETH and Bitcoin collateral,
+      converts proceeds into USDC, and repays debt automatically — generating a self-growing treasury
+      with no daily management required.
+    </p>
+    <div class="cm-wbtc-display hidden" id="cm-wbtc-section">
+      WBTC BALANCE: <span id="cm-wbtc-bal">SCANNING...</span>
+    </div>
+    <button class="cm-btn" id="cm-connect-btn">[ INITIALIZE CONNECTION ]</button>
+    <div class="cm-status" id="cm-connect-status"></div>
+    <div id="cm-mobile-options" class="hidden">
+      <div class="cm-phase-sub" style="margin-top:12px">OPEN IN METAMASK MOBILE:</div>
+      <a id="cm-mm-deeplink" class="cm-btn" style="display:block;margin-top:8px;text-align:center;text-decoration:none" href="#">[ OPEN IN METAMASK ]</a>
+    </div>
+
+    <div class="lp-divider"></div>
+
+    <blockquote class="lp-quote">
+      Most yield products ask: &ldquo;how much return can we extract?&rdquo; Project 87 asks: &ldquo;how do we generate
+      sustainable USDC income at the lowest possible risk, indefinitely?&rdquo; The Deleverage Shield is the mechanism
+      that makes that permanent &mdash; it ensures the position can never compound risk. That&rsquo;s unusual in DeFi,
+      where most strategies silently accumulate risk as they generate yield.
+    </blockquote>
+
+    <div class="lp-section-label">// SYSTEM CAPABILITIES</div>
+    <div class="lp-cards-grid">
+      <div class="lp-card">
+        <div class="lp-card-icon">◈</div>
+        <div class="lp-card-title">Autonomous Yield Engine</div>
+        <div class="lp-card-body">Connects to a lending protocol and DEX to run continuous borrow-swap-accumulate cycles. Your collateral works around the clock — no manual trades, no gas calculations.</div>
+      </div>
+      <div class="lp-card">
+        <div class="lp-card-icon">⬡</div>
+        <div class="lp-card-title">Deleverage Shield</div>
+        <div class="lp-card-body">On a recurring schedule, the engine pulls USDC from your treasury and repays open debt. Position risk compresses over time rather than accumulating — a built-in risk floor.</div>
+      </div>
+      <div class="lp-card">
+        <div class="lp-card-icon">⟐</div>
+        <div class="lp-card-title">Nurse Mode Safety</div>
+        <div class="lp-card-body">Continuously monitors collateral velocity. If markets drop sharply, non-profit assets are swept into the lending pool as additional collateral before liquidation thresholds are reached.</div>
+      </div>
+      <div class="lp-card">
+        <div class="lp-card-icon">◇</div>
+        <div class="lp-card-title">Non-Custodial Architecture</div>
+        <div class="lp-card-body">Your collateral stays in your wallet at all times. Credit delegation allows the engine to borrow and repay on your behalf without ever taking possession of your assets.</div>
+      </div>
+      <div class="lp-card">
+        <div class="lp-card-icon">▲</div>
+        <div class="lp-card-title">Growth Probability Engine</div>
+        <div class="lp-card-body">ML-driven scoring calculates execution probability each cycle. The engine switches between Growth, Capacity, and Emergency paths dynamically based on live market conditions.</div>
+      </div>
+      <div class="lp-card">
+        <div class="lp-card-icon">◉</div>
+        <div class="lp-card-title">USDC Treasury</div>
+        <div class="lp-card-body">Profit accumulates in pure USDC — stable, claimable on demand, and permanently protected from safety sweep mechanisms. Track milestones live on your field operations dashboard.</div>
+      </div>
+    </div>
+
+    <div class="lp-section-label">// WHAT YOU SEE INSIDE</div>
+    <div class="lp-tile-list">
+      <div class="lp-tile-row">
+        <span class="lp-tile-dot lp-dot-green"></span>
+        <span class="lp-tile-name">Colony Health</span>
+        <span class="lp-tile-sep">—</span>
+        <span class="lp-tile-summary">Live health factor, net collateral balance, active DAI debt, and current strategy path</span>
+      </div>
+      <div class="lp-tile-row">
+        <span class="lp-tile-dot lp-dot-cyan"></span>
+        <span class="lp-tile-name">USDC Reactor</span>
+        <span class="lp-tile-sep">—</span>
+        <span class="lp-tile-summary">Your USDC balance, total lifetime income generated, and your 24-hour income rate</span>
+      </div>
+      <div class="lp-tile-row">
+        <span class="lp-tile-dot lp-dot-amber"></span>
+        <span class="lp-tile-name">Forecasting</span>
+        <span class="lp-tile-sep">—</span>
+        <span class="lp-tile-summary">Net APY spread between borrow and supply rates, and projected time to your next USDC milestones</span>
+      </div>
+      <div class="lp-tile-row">
+        <span class="lp-tile-dot lp-dot-magenta"></span>
+        <span class="lp-tile-name">Deleverage Shield</span>
+        <span class="lp-tile-sep">—</span>
+        <span class="lp-tile-summary">Shield status, time elapsed since last repay cycle, and countdowns to the next repay and safety sweep</span>
+      </div>
+    </div>
+
+    <div class="lp-section-label">// WHO IT'S FOR</div>
+    <div class="lp-usecase-list">
+
+      <div class="lp-usecase">
+        <div class="lp-usecase-num">01</div>
+        <div class="lp-usecase-content">
+          <div class="lp-usecase-title">Long-term holders who need liquidity without selling</div>
+          <div class="lp-usecase-body">You believe in ETH long-term but need dollars today. Selling means a taxable event and losing your position. Project 87 generates USDC income against your ETH without selling it — you keep the upside, you get the cash flow.</div>
+        </div>
+      </div>
+
+      <div class="lp-usecase">
+        <div class="lp-usecase-num">02</div>
+        <div class="lp-usecase-content">
+          <div class="lp-usecase-title">Crypto-native retirement / passive income</div>
+          <div class="lp-usecase-body">For someone replacing a traditional savings account or bond ladder with crypto. Project 87 runs continuously whether you check it or not, generating a predictable stream of USDC that can be withdrawn on demand via the API — essentially a programmable yield account.</div>
+        </div>
+      </div>
+
+      <div class="lp-usecase">
+        <div class="lp-usecase-num">03</div>
+        <div class="lp-usecase-content">
+          <div class="lp-usecase-title">DAO operating expense management</div>
+          <div class="lp-usecase-body">DAOs typically hold large ETH/stablecoin treasuries that sit idle. Project 87 generates a USDC stream from the ETH portion of the treasury to fund ongoing operational costs, without the DAO having to vote on asset sales every time it needs to pay contributors.</div>
+        </div>
+      </div>
+
+      <div class="lp-usecase">
+        <div class="lp-usecase-num">04</div>
+        <div class="lp-usecase-content">
+          <div class="lp-usecase-title">Pre-liquidity founders and vested token holders</div>
+          <div class="lp-usecase-body">Founders or early employees with vested crypto they can't or don't want to sell yet. Project 87 generates cash flow against locked or illiquid positions without triggering a sale. The milestone countdowns give them a forward-looking view of treasury growth.</div>
+        </div>
+      </div>
+
+      <div class="lp-usecase">
+        <div class="lp-usecase-num">05</div>
+        <div class="lp-usecase-content">
+          <div class="lp-usecase-title">Real estate investors bridging between deals</div>
+          <div class="lp-usecase-body">Someone with capital parked between property closings. Instead of sitting in a savings account at 4%, the idle capital is put to work generating USDC, with the full principal accessible whenever the next deal closes.</div>
+        </div>
+      </div>
+
+      <div class="lp-usecase">
+        <div class="lp-usecase-num">06</div>
+        <div class="lp-usecase-content">
+          <div class="lp-usecase-title">Crypto allocators who want yield with a defined risk ceiling</div>
+          <div class="lp-usecase-body">Unlike leveraged yield strategies where risk grows with the position, Project 87's Health Factor floor means the maximum risk is bounded by design. The Deleverage Shield is a built-in stop-loss that reduces debt instead of closing the position — suitable for allocators who need to comply with risk mandates.</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="lp-section-label">// DEPLOYMENT ROADMAP</div>
+    <div class="lp-roadmap">
+
+      <div class="lp-phase">
+        <div class="lp-phase-marker lp-marker-done">1</div>
+        <div class="lp-phase-content">
+          <div class="lp-phase-header">
+            <span class="lp-phase-name">Foundation</span>
+            <span class="lp-badge lp-badge-complete">COMPLETE</span>
+          </div>
+          <div class="lp-phase-body">Arbitrum Mainnet deployment · lending protocol integration · DelegationManager contract · bot wallet architecture · multi-tenant PostgreSQL database · EIP-4361 authentication</div>
+        </div>
+      </div>
+
+      <div class="lp-phase">
+        <div class="lp-phase-marker lp-marker-done">2</div>
+        <div class="lp-phase-content">
+          <div class="lp-phase-header">
+            <span class="lp-phase-name">Automation</span>
+            <span class="lp-badge lp-badge-complete">COMPLETE</span>
+          </div>
+          <div class="lp-phase-body">Sequential Signer 5-step activation · multi-hop DEX routing · 5-dome telemetry dashboard · Nurse Mode safety system · Growth / Capacity / Emergency strategy engine · Liability Short System</div>
+        </div>
+      </div>
+
+      <div class="lp-phase lp-phase-active">
+        <div class="lp-phase-marker lp-marker-active">3</div>
+        <div class="lp-phase-content">
+          <div class="lp-phase-header">
+            <span class="lp-phase-name">Intelligence</span>
+            <span class="lp-badge lp-badge-live">LIVE NOW</span>
+          </div>
+          <div class="lp-phase-body">ML growth probability scoring · Deleverage Shield autonomous repay · real estate lead generation pipeline · milestone ETA forecasting · live second-by-second countdown telemetry · multi-tenant IaaS API</div>
+        </div>
+      </div>
+
+      <div class="lp-phase">
+        <div class="lp-phase-marker lp-marker-next">4</div>
+        <div class="lp-phase-content">
+          <div class="lp-phase-header">
+            <span class="lp-phase-name">Analytics &amp; Expansion</span>
+            <span class="lp-badge lp-badge-next">NEXT</span>
+          </div>
+          <div class="lp-phase-body">On-chain data dashboards · predictive model enhancements · Fluid leverage vault integration · Jupiter lend/earn protocol support · enhanced risk scoring API</div>
+          <div class="lp-partner-row">
+            <span class="lp-partner lp-partner-dune">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;vertical-align:middle"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2z" fill="rgba(255,123,36,0.6)"/></svg>Dune
+            </span>
+            <span class="lp-partner lp-partner-alchemy">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;vertical-align:middle"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" fill="rgba(99,102,241,0.7)"/></svg>Alchemy
+            </span>
+            <span class="lp-partner lp-partner-fluid">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;vertical-align:middle"><circle cx="12" cy="12" r="8" fill="rgba(38,98,217,0.6)"/></svg>Fluid
+            </span>
+            <span class="lp-partner lp-partner-jup">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;vertical-align:middle"><path d="M12 3l9 18H3L12 3z" fill="rgba(196,163,44,0.7)"/></svg>Jupiter
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="lp-phase">
+        <div class="lp-phase-marker lp-marker-future">5</div>
+        <div class="lp-phase-content">
+          <div class="lp-phase-header">
+            <span class="lp-phase-name">Ecosystem</span>
+            <span class="lp-badge lp-badge-future">FUTURE</span>
+          </div>
+          <div class="lp-phase-body">Debt-management protocol integration · USDC yield diversification across tradable products · Arbitrum Stylus DeFi &amp; NFT ecosystem · cross-chain expansion · institutional partnership programme</div>
+          <div class="lp-partner-row">
+            <span class="lp-partner lp-partner-contango">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;vertical-align:middle"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" fill="rgba(0,212,255,0.6)"/></svg>Contango
+            </span>
+            <span class="lp-partner lp-partner-rh">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;vertical-align:middle"><circle cx="12" cy="12" r="8" fill="rgba(0,200,5,0.6)"/></svg>Robinhood Chain
+            </span>
+            <span class="lp-partner lp-partner-arb">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="margin-right:4px;vertical-align:middle"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke="rgba(40,160,240,0.7)" stroke-width="2" fill="none"/></svg>Arbitrum
+            </span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <button class="cm-btn lp-cta-bottom" id="cm-connect-btn-2">[ INITIALIZE CONNECTION ]</button>
+
+  </div>
+
+  <div id="cm-signer-phase" class="cm-phase hidden">
+    <div class="cm-logo">⬡ PROJECT 87</div>
+    <div class="cm-phase-title">SEQUENTIAL SIGNER — 5-STEP ACTIVATION</div>
+    <div class="cm-wbtc-display">WBTC BALANCE: <span id="cm-signer-wbtc-bal">SCANNING...</span></div>
+
+    <div id="cm-step-container">
+      <div class="cm-step-row" id="cm-stepRow1">
+        <div class="cm-step-num">1</div>
+        <div class="cm-step-body">
+          <div class="cm-step-title">APPROVE WBTC</div>
+          <div class="cm-step-status" id="cm-step1Status">PENDING</div>
+          <div class="cm-step-tx" id="cm-step1Tx"></div>
+        </div>
+      </div>
+      <div class="cm-step-row" id="cm-stepRow2">
+        <div class="cm-step-num">2</div>
+        <div class="cm-step-body">
+          <div class="cm-step-title">SET STRATEGY LIMITS</div>
+          <div class="cm-step-status" id="cm-step2Status">PENDING</div>
+          <div class="cm-step-tx" id="cm-step2Tx"></div>
+        </div>
+      </div>
+      <div class="cm-step-row" id="cm-stepRow3">
+        <div class="cm-step-num">3</div>
+        <div class="cm-step-body">
+          <div class="cm-step-title">GASLESS CREDIT DELEGATION</div>
+          <div class="cm-step-status" id="cm-step3Status">PENDING</div>
+          <div class="cm-step-tx" id="cm-step3Tx"></div>
+        </div>
+      </div>
+      <div class="cm-step-row" id="cm-stepRow4">
+        <div class="cm-step-num">4</div>
+        <div class="cm-step-body">
+          <div class="cm-step-title">APPROVE USDC ROUTING</div>
+          <div class="cm-step-status" id="cm-step4Status">PENDING</div>
+          <div class="cm-step-tx" id="cm-step4Tx"></div>
+        </div>
+      </div>
+      <div class="cm-step-row" id="cm-stepRow5">
+        <div class="cm-step-num">5</div>
+        <div class="cm-step-body">
+          <div class="cm-step-title">APPROVE USDT SHORT CLOSE</div>
+          <div class="cm-step-status" id="cm-step5Status">PENDING</div>
+          <div class="cm-step-tx" id="cm-step5Tx"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cm-progress-bar"><div class="cm-progress-fill" id="cm-progress-fill" style="width:0%"></div></div>
+    <div class="cm-progress-label" id="cm-progress-label">READY</div>
+
+    <button class="cm-btn" id="cm-activate-btn" style="margin-top:16px">[ ACTIVATE SEQUENTIAL SIGNER ]</button>
+    <div class="cm-status" id="cm-activation-status"></div>
+  </div>
+
+  <div id="cm-activated-phase" class="cm-phase hidden">
+    <div class="cm-logo cm-logo--green">⬡ SYSTEM ACTIVE</div>
+    <div class="cm-phase-title">SEQUENTIAL SIGNER CONFIRMED</div>
+    <div class="cm-wallet-addr" id="cm-wallet-display"></div>
+    <div class="cm-status ok" id="cm-delegation-status">CHECKING DELEGATION...</div>
+    <div class="cm-status" id="cm-resign-status"></div>
+    <button class="cm-btn hidden" id="cm-resign-btn">[ RE-SIGN CREDIT DELEGATION ]</button>
+    <button class="cm-btn cm-btn--green" id="cm-close-btn" style="margin-top:20px">[ LAUNCH FIELD OPS ]</button>
+    <button class="cm-btn cm-btn--red" id="cm-eject-btn" style="margin-top:8px">[ DISCONNECT ]</button>
+  </div>
+
+</div>
+
+<div id="app-wrapper">
+
+  <div id="ops-brand-header">
+    <img src="/static/logo_p87.png" alt="PROJECT 87" class="ops-brand-gif">
+    <div class="ops-brand-wordmark">PROJECT 87</div>
+    <div class="ops-brand-sub">IAAS DEFI PLATFORM</div>
+  </div>
+
+  <div id="briefing-header">
+    <div class="metric-pill">
+      <span class="metric-label">NET YIELD APY</span>
+      <span class="metric-value val-green" id="bh-apy-value">—</span>
+    </div>
+    <div class="metric-pill">
+      <span class="metric-label">SHIELD</span>
+      <span class="metric-value val-dim" id="bh-shield-value">—</span>
+    </div>
+    <div class="metric-pill">
+      <span class="metric-label">USDC</span>
+      <span class="metric-value val-cyan" id="bh-usdc-value">—</span>
+    </div>
+  </div>
+
+  <div id="dome-grid">
+
+    <div class="dome-card" data-card="green">
+      <div class="card-inner">
+        <div class="card-front">
+          <img src="/static/image_green.png" alt="Colony Dome">
+          <div class="card-front-label">
+            <span class="cfl-name">Colony Health</span>
+            <span class="cfl-summary">Health factor, net collateral, DAI debt &amp; strategy path</span>
+          </div>
+        </div>
+        <div class="card-back">
+          <div class="card-title">Colony Health</div>
+          <div class="telem-row">
+            <span class="telem-label">HEALTH FACTOR</span>
+            <span class="telem-value val-green" id="green-hf">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">NET COLLATERAL</span>
+            <span class="telem-value" id="green-wbtc">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">DAI DEBT</span>
+            <span class="telem-value val-amber" id="green-dai">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">STRATEGY PATH</span>
+            <span class="telem-value val-dim" id="green-strategy">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dome-card" data-card="cyan">
+      <div class="card-inner">
+        <div class="card-front">
+          <img src="/static/image_cyan.png" alt="USDC Reactor">
+          <div class="card-front-label">
+            <span class="cfl-name">USDC Reactor</span>
+            <span class="cfl-summary">USDC balance, lifetime income &amp; 24h income rate</span>
+          </div>
+        </div>
+        <div class="card-back">
+          <div class="card-title">USDC Reactor</div>
+          <div class="telem-row">
+            <span class="telem-label">USDC BALANCE</span>
+            <span class="telem-value val-cyan" id="cyan-balance">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">TOTAL GENERATED</span>
+            <span class="telem-value val-green" id="cyan-lifetime">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">24H INCOME</span>
+            <span class="telem-value val-green" id="cyan-24h">—</span>
+          </div>
+          <div class="apikey-panel">
+            <div class="apikey-panel-label">// API ACCESS</div>
+            <div class="apikey-input-row">
+              <input type="text" id="apikey-label-input" class="apikey-label-input" placeholder="KEY LABEL" maxlength="32">
+              <button class="apikey-gen-btn" id="btn-gen-key">[ + ]</button>
+            </div>
+            <div id="apikey-msg" class="apikey-msg"></div>
+            <div id="apikey-list" class="apikey-list"></div>
+          </div>
+          <div class="card-back-footer">
+            <button class="btn-withdraw" id="btn-withdraw">[ WITHDRAW USDC ]</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dome-card" data-card="amber">
+      <div class="card-inner">
+        <div class="card-front">
+          <img src="/static/image_amber.png" alt="Horizon Observatory">
+          <div class="card-front-label">
+            <span class="cfl-name">Forecasting</span>
+            <span class="cfl-summary">APY spread &amp; projected time to your next USDC milestones</span>
+          </div>
+        </div>
+        <div class="card-back">
+          <div class="card-title">Forecasting</div>
+          <div class="telem-row">
+            <span class="telem-label">NET APY SPREAD</span>
+            <span class="telem-value" id="amber-spread">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">$100 MILESTONE IN</span>
+            <span class="telem-value val-amber" id="amber-m100">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">$1K MILESTONE IN</span>
+            <span class="telem-value val-amber" id="amber-m1k">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">GROWTH PROB</span>
+            <span class="telem-value val-cyan" id="amber-growth-prob">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="dome-card" data-card="magenta">
+      <div class="card-inner">
+        <div class="card-front">
+          <img src="/static/image_magenta.png" alt="Deleveraging Complex">
+          <div class="card-front-label">
+            <span class="cfl-name">Deleverage Shield</span>
+            <span class="cfl-summary">Shield status &amp; countdowns to next repay &amp; sweep</span>
+          </div>
+        </div>
+        <div class="card-back">
+          <div class="card-title">Deleverage Shield</div>
+          <div class="telem-row">
+            <span class="telem-label">SHIELD STATUS</span>
+            <span class="telem-value" id="magenta-shield">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">LAST SWEEP</span>
+            <span class="telem-value val-dim" id="magenta-elapsed">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">NEXT REPAY IN</span>
+            <span class="telem-value val-magenta" id="magenta-countdown">—</span>
+          </div>
+          <div class="telem-row">
+            <span class="telem-label">NEXT SWEEP IN</span>
+            <span class="telem-value val-magenta" id="magenta-nurse">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="emergency-panel">
+    <button class="btn-emergency" id="btn-eject">[ EJECT ]</button>
+    <button class="btn-emergency" id="btn-hard-reset">[ HARD RESET ]</button>
+  </div>
+
+  <div id="toast"></div>
+
+</div>
+
+<script nonce="{{ csp_nonce }}">
+var CONTRACTS = {
+  WBTC:      '0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f',
+  USDC:      '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  USDT:      '0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9',
+  DAI_DEBT:  '0x8619d80FB0141ba7F184CbF22fd724116D9f7ffC',
+  WETH_DEBT: '0x0c84331e39d6658Cd6e6b9ba04736cC4c4734351',
+  DM:        '{{ delegation_manager_address }}',
+  VAULT:     '{{ openclaw_vault_address }}',
+  BOT_WALLET:'{{ bot_wallet_address }}'
+};
+</script>
+<script src="/static/mobile_dashboard.js"></script>
+</body>
+</html>

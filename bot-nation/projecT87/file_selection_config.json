@@ -1,0 +1,25 @@
+{
+  "preferred_files": {
+    "monitoring": "aave_health_monitor.py",
+    "transaction": "production_debt_swap_executor.py",
+    "validation": "comprehensive_transaction_validator.py",
+    "wallet": "wallet_diagnostics.py",
+    "balance": "check_wallet_balance.py",
+    "gas_optimization": "gas_optimization.py"
+  },
+  "fallback_files": {
+    "monitoring": "check_wallet_balance.py",
+    "transaction": "comprehensive_debt_swap_executor.py",
+    "validation": "contract_validator.py",
+    "wallet": "arbitrum_testnet_agent.py",
+    "balance": "check_balances.py",
+    "gas_optimization": "gas_fee_calculator.py"
+  },
+  "selection_weights": {
+    "latest_modified": 0.25,
+    "last_used_per_log": 0.25,
+    "config_preferred": 0.25,
+    "majority_active": 0.15,
+    "manual_override": 0.1
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "pnl_targets": {
+    "pnl_growth_target": 55.0,
+    "pnl_capacity_target": 22.0,
+    "pnl_debt_swap_target": 1.5
+  },
+  "operational_thresholds": {
+    "growth_threshold_usd": 50.0,
+    "capacity_threshold_usd": 25.0,
+    "debt_swap_threshold_usd": 15.0,
+    "pnl_growth_target_threshold_usd": 5500.0,
+    "pnl_capacity_target_threshold_usd": 2750.0
+  },
+  "system_parameters": {
+    "health_factor_min": 1.5,
+    "usd_to_pnl_rate": 0.1,
+    "max_utilization_percent": 85,
+    "re_leverage_percent": 15.0,
+    "operation_cooldown_seconds": 300
+  },
+  "conversion_coefficients": {
+    "growth_multiplier": 10.0,
+    "capacity_multiplier": 12.5,
+    "debt_swap_multiplier": 10.0
+  },
+  "metadata": {
+    "last_updated": 1758997075.9237657,
+    "version": "1.0.0",
+    "description": "PnL-centric configuration for autonomous DeFi operations"
+  }
+}

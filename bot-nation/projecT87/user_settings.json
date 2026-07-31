@@ -1,0 +1,10 @@
+{
+  "health_factor_target": 1.19,
+  "borrow_trigger_threshold": 0.02,
+  "arb_decline_threshold": 0.05,
+  "auto_mode": true,
+  "exploration_rate": 0.1,
+  "system_active": true,
+  "position_created": true,
+  "last_activated": 1751165164.98674
+}
