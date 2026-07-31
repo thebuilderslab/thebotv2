@@ -341,6 +341,51 @@ export const finance = {
     ),
 };
 
+// ─── projecT87 (DeFi / Arbitrum) ───────────────────────────────────────────────
+
+export interface P87Status {
+  configured: boolean;
+  wired_endpoints: string[];
+  gated_endpoints: string[];
+}
+
+export interface P87VaultHealth {
+  wallet_address:        string;
+  health_factor:         number;
+  total_collateral_usd:  number;
+  total_debt_usd:        number;
+  net_worth_usd:         number;
+  available_borrows_usd: number;
+}
+
+export interface P87Notification {
+  id:         number;
+  title:      string;
+  message:    string;
+  priority:   string;
+  created_at: string;
+}
+
+export interface P87BorrowResult {
+  status:   string;
+  executed: boolean;
+  note:     string;
+  request:  { amount: number; asset: string };
+  event_id: string;
+}
+
+export const p87 = {
+  status:        () => request<P87Status>("/api/p87/status"),
+  vaultHealth:   () => request<P87VaultHealth>("/api/p87/vault/health"),
+  notifications: () => request<{ notifications: P87Notification[] }>("/api/p87/notifications"),
+  // EXPERIMENTAL — records intent only; never executes on-chain (non-autonomous).
+  requestBorrow: (amount: number, asset: string) =>
+    request<P87BorrowResult>("/api/p87/credit/borrow", {
+      method: "POST",
+      body: JSON.stringify({ amount, asset }),
+    }),
+};
+
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 export const health = {

@@ -21,6 +21,7 @@ import { baileyRouter } from "./routes/bailey";
 import { propstreamRouter } from "./routes/propstream";
 import { twsRouter } from "./routes/thinkorswim";
 import { financeRouter } from "./routes/finance";
+import { projecT87Router } from "./routes/projecT87";
 import { schwabRouter } from "./routes/schwab";
 import { buildRouter } from "./routes/build";
 import { adminRouter } from "./routes/admin";
@@ -47,6 +48,10 @@ export interface Env {
   RETELL_AGENT_ID?: string;
   SCHWAB_CLIENT_ID?: string;
   SCHWAB_CLIENT_SECRET?: string;
+  // projecT87 native DeFi service (bot-nation/projecT87). URL is a plaintext var;
+  // API key is a secret (wrangler secret put PROJECT87_API_KEY).
+  PROJECT87_API_URL?: string;
+  PROJECT87_API_KEY?: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -91,6 +96,9 @@ app.route("/", buildRouter);
 // Admin utilities (Hono native — /api/admin/*)
 app.route("/", adminRouter);
 
+// projecT87 DeFi integration (Hono native — /api/p87/*)
+app.route("/", projecT87Router);
+
 // Legacy itty-router routes (forwarded as middleware)
 const legacyHandler = async (c: any) => {
   // c.req in Hono v4 is a HonoRequest wrapper — use c.req.raw for the native Request
@@ -118,6 +126,7 @@ const legacyHandler = async (c: any) => {
   if (pathname.startsWith("/api/bailey")) return baileyRouter.fetch(raw, env, ctx);
   if (pathname.startsWith("/api/propstream")) return propstreamRouter.fetch(raw, env, ctx);
   if (pathname.startsWith("/api/finance")) return financeRouter.fetch(raw, env, ctx);
+  if (pathname.startsWith("/api/p87")) return projecT87Router.fetch(raw, env, ctx);
   if (pathname.startsWith("/api/build")) return buildRouter.fetch(raw, env, ctx);
   if (pathname.startsWith("/api/admin")) return adminRouter.fetch(raw, env, ctx);
   if (pathname === "/api/graph") return graphHandler(raw, env);

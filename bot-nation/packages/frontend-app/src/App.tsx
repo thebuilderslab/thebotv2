@@ -12,6 +12,7 @@ import { GraphView } from "./pages/GraphView";
 import { Settings } from "./pages/Settings";
 import { AgentStream } from "./pages/AgentStream";
 import { FinanceDashboard } from "./pages/FinanceDashboard";
+import { DefiDashboard } from "./pages/DefiDashboard";
 
 const NAV = [
   { to: "/", icon: "⬡", label: "Overview", end: true },
@@ -25,6 +26,7 @@ const NAV = [
   { to: "/graph", icon: "⬡", label: "Graph" },
   { to: "/stream", icon: "⟳", label: "Live Stream" },
   { to: "/finance", icon: "◈", label: "Finance" },
+  { to: "/defi", icon: "🪙", label: "DeFi / P87" },
   { to: "/settings", icon: "⚙", label: "Settings" },
 ];
 
@@ -84,6 +86,7 @@ export function App() {
         <Route path="graph" element={<GraphView />} />
         <Route path="stream" element={<AgentStream />} />
         <Route path="finance" element={<FinanceDashboard />} />
+        <Route path="defi" element={<DefiDashboard />} />
         <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>
