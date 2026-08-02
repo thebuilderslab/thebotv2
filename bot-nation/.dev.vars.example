@@ -1,0 +1,36 @@
+# bot-nation-api — environment template (dummy values; copy to
+# packages/backend-api/.dev.vars for local dev; set secrets in prod via
+# `wrangler secret put <NAME>`). Names below are the ones actually referenced in
+# packages/backend-api/src + wrangler.jsonc as of migrations 0001–0045.
+#
+# BINDINGS (configured in wrangler.jsonc, NOT here): DB (D1 pbot-nation-db),
+# AGENT_ACTOR (Durable Object), AI (Workers AI). Do not put these in .dev.vars.
+
+# ── Plaintext vars (declared in wrangler.jsonc "vars") ────────────────────────
+SEARXNG_BASE_URL=https://your-searxng.example.com
+LAST30DAYS_URL=https://last30days-api.example.com
+HERMES_API_URL=https://hermes-api-minimal.example.com
+AUTORESEARCHCLAW_URL=https://autoresearchclaw-api.example.com
+TRADING_URL=https://tradingagents-api.example.com
+PROJECT87_API_URL=            # empty = projecT87 NOT WIRED (see PROJECT87_INTEGRATION.md)
+TWS_WEBHOOK_SECRET=
+
+# ── Secrets (set via `wrangler secret put <NAME>`) ────────────────────────────
+ANTHROPIC_API_KEY=sk-ant-REPLACE_ME
+OPENROUTER_API_KEY=sk-or-REPLACE_ME
+TELEGRAM_BOT_TOKEN=123456:REPLACE_ME
+TELEGRAM_CHAT_ID=000000000
+RETELL_API_KEY=key_REPLACE_ME
+RETELL_AGENT_ID=agent_REPLACE_ME
+SCHWAB_CLIENT_ID=REPLACE_ME
+SCHWAB_CLIENT_SECRET=REPLACE_ME
+GITHUB_TOKEN=ghp_REPLACE_ME
+BRAVE_SEARCH_API_KEY=REPLACE_ME
+HERMES_API_KEY=REPLACE_ME
+LAST30DAYS_API_KEY=REPLACE_ME
+RESEARCH_API_KEY=REPLACE_ME
+# projecT87 integration — sent as X-API-Key to the projecT87 service
+PROJECT87_API_KEY=REPLACE_ME
+
+# NOTE: DEPLOY_WEBHOOK_SECRET is declared on the Env interface (src/index.ts) but
+# is not currently referenced in code — omitted here until it is actually used.
