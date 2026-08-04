@@ -1,8 +1,8 @@
 # Tool Registry Spec (current state)
 
-The `tools` D1 table as it exists after migrations 0001–0045. **13 rows** — this is the
+The `tools` D1 table as it exists after migrations 0001–0046. **14 rows** — this is the
 complete, verified registry (derived by applying all migrations and reading the table).
-Registration lives in `migrations/{0006,0033,0035,0041,0045}_*.sql`.
+Registration lives in `migrations/{0006,0033,0035,0041,0045,0046}_*.sql`.
 
 **Status semantics** (the `status` column): `active` = callable / **LIVE**; `pending_review`
 = registered but **EXPERIMENTAL / approval-gated**, not for autonomous use.
@@ -58,6 +58,11 @@ Registration lives in `migrations/{0006,0033,0035,0041,0045}_*.sql`.
 - Endpoint: `…workers.dev/api/finance/positions`
 - Input: `{}` (none). Returns current D1-stored Schwab positions.
 
+### `schwab_options_chain` — LIVE (`http_api`, registered by 0046)
+- Endpoint: `…workers.dev/api/finance/options`
+- Input: `{ "symbol": string (required), "contract_type"?: "CALL"|"PUT"|"ALL", "strike_count"?: integer, "from_date"?: "YYYY-MM-DD", "to_date"?: "YYYY-MM-DD" }`
+- Live options chain from Schwab Market Data (`…/marketdata/v1/chains`). Finance SOP prompts reference it.
+
 ## projecT87 (DeFi / Arbitrum) — registered in 0045
 
 ### `p87_vault_health` — LIVE (`http_api`)
@@ -83,7 +88,10 @@ Registration lives in `migrations/{0006,0033,0035,0041,0045}_*.sql`.
 
 ## Notes / intentionally omitted
 
-- **`schwab_options_chain`** — referenced by an `UPDATE` in `migrations/0033` but **no such row exists**
-  in the registry (the UPDATE matched 0 rows; the tool was never `INSERT`ed). Not documented as a tool.
+- **`schwab_options_chain` registration gap — RESOLVED by `migrations/0046`.** The capability was always
+  LIVE (`POST /api/finance/options` → Schwab `…/marketdata/v1/chains`) and finance SOP prompts reference it,
+  but `migrations/0033` only ran an `UPDATE ... WHERE name='schwab_options_chain'` that matched 0 rows — the
+  row was never `INSERT`ed. Migration 0046 now inserts it (status `active`, same schema 0033 intended),
+  bringing the registry to 14 tools.
 - Endpoints shown as `…workers.dev` are `https://bot-nation-api.thejamalshackleford.workers.dev`.
 - All read-only projecT87 tools return `503 NOT WIRED` until `PROJECT87_API_URL` + `PROJECT87_API_KEY` are set.
