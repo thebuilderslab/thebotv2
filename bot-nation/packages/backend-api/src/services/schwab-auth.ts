@@ -14,6 +14,9 @@
  */
 
 import { run, queryOne } from "../db/schema";
+import { claimCronTick, releaseCronTick } from "./cron-cas";
+
+const REFRESH_LOCK_KEY = "schwab_token_refresh";
 
 const SCHWAB_TOKEN_URL   = "https://api.schwabapi.com/v1/oauth/token";
 const SCHWAB_AUTH_URL    = "https://api.schwabapi.com/v1/oauth/authorize";
@@ -158,6 +161,12 @@ export async function loadTokens(db: D1Database): Promise<SchwabTokens | null> {
 
 // ── Get a valid access token (auto-refreshes if expired) ─────────────────────
 
+function isFresh(tokens: SchwabTokens): boolean {
+  // 5 min > 2 min: ensures token is fresh even when a cron fires at the same
+  // clock-minute as the last refresh (e.g. midday task at :30, exit check at :00).
+  return Date.now() < new Date(tokens.expires_at).getTime() - 300_000;
+}
+
 export async function getAccessToken(
   db: D1Database,
   clientId: string,
@@ -166,18 +175,40 @@ export async function getAccessToken(
   const stored = await loadTokens(db);
   if (!stored) throw new Error("Schwab not authorized. Visit /api/schwab/auth to start OAuth flow.");
 
-  // If access token still valid (with 5 min buffer), return it.
-  // 5 min > 2 min: ensures token is fresh even when a cron fires at the same
-  // clock-minute as the last refresh (e.g. midday task at :30, exit check at :00).
-  const expiresAt = new Date(stored.expires_at).getTime();
-  if (Date.now() < expiresAt - 300_000) {
+  if (isFresh(stored)) {
     return stored.access_token;
   }
 
-  // Refresh
-  const fresh = await refreshAccessToken(stored.refresh_token, clientId, clientSecret);
-  await storeTokens(db, fresh);
-  return fresh.access_token;
+  // ── Refresh, guarded by a CAS lock ──────────────────────────────────────────
+  // Schwab rotates refresh_token on every use, so two concurrent callers
+  // (e.g. the heartbeat tick and an in-flight finance-lead task) racing to
+  // refresh with the same refresh_token can leave the loser with a dead token.
+  // Only the lock winner calls Schwab; everyone else waits for the fresh
+  // tokens to land in D1 and reads those instead.
+  const claim = await claimCronTick(db, REFRESH_LOCK_KEY, { ttlMs: 15_000 });
+
+  if (!claim.ok) {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await scheduler.wait(300);
+      const latest = await loadTokens(db);
+      if (latest && isFresh(latest)) return latest.access_token;
+    }
+    // Refresh in flight elsewhere didn't land in time — fall through and
+    // attempt it ourselves rather than blocking the caller indefinitely.
+  }
+
+  try {
+    // Re-read: the lock winner (or whoever we waited on) may have already
+    // refreshed while we were claiming/waiting.
+    const latest = await loadTokens(db);
+    if (latest && isFresh(latest)) return latest.access_token;
+
+    const fresh = await refreshAccessToken(latest?.refresh_token ?? stored.refresh_token, clientId, clientSecret);
+    await storeTokens(db, fresh);
+    return fresh.access_token;
+  } finally {
+    if (claim.ok) await releaseCronTick(db, REFRESH_LOCK_KEY);
+  }
 }
 
 // ── Check if authorized ───────────────────────────────────────────────────────

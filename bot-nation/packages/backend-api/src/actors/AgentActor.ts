@@ -302,10 +302,12 @@ export class AgentActor implements DurableObject {
       const stack = err instanceof Error ? (err.stack ?? "") : "";
       console.error(`[AgentActor] task ${item.taskId} FAILED (attempt): ${msg}`);
 
-      // Load task to check retry count
+      // Load task to check retry count (+ telegram fields so we can surface
+      // a terminal failure to the user instead of leaving the progress stub
+      // frozen at "Starting… 0%").
       const task = await queryOne<TaskRow>(
         this.env.DB,
-        "SELECT retry_count, max_retries FROM tasks WHERE id = ?",
+        "SELECT retry_count, max_retries, kind, input, telegram_chat_id, telegram_message_id FROM tasks WHERE id = ?",
         [item.taskId],
       );
 
@@ -333,6 +335,13 @@ export class AgentActor implements DurableObject {
         try {
           await this.emitEvent(item.taskId, "task.do_error", { error: msg, stack: stack.slice(0, 500) }, now);
         } catch { /* swallow */ }
+        // Surface the failure to the user's Telegram chat so a cron/task doesn't
+        // just leave a frozen "Starting… 0%" progress stub with no resolution.
+        if (task && task.telegram_chat_id) {
+          try {
+            await this.editTelegramFailure(task as TaskRow, item.taskId, msg);
+          } catch { /* telegram best-effort */ }
+        }
         this.broadcast(JSON.stringify({ type: "error", taskId: item.taskId, message: msg }));
       }
     } finally {
@@ -1383,6 +1392,35 @@ export class AgentActor implements DurableObject {
 
   // ── Telegram progress / completion helpers ──────────────────────────────────
 
+  // Resolve the frozen progress stub into a terminal failure message so a
+  // cron/agent task that dies (e.g. LLM provider out of credits) doesn't leave
+  // the user staring at "Starting… 0%" forever.
+  private async editTelegramFailure(task: TaskRow, taskId: string, reason: string): Promise<void> {
+    if (!task.telegram_chat_id || !this.env.TELEGRAM_BOT_TOKEN) return;
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    let taskLabel = task.kind;
+    try {
+      const inp = JSON.parse(task.input) as { summary?: string };
+      if (inp.summary) taskLabel = inp.summary;
+    } catch { /* ignore */ }
+
+    const text =
+      `❌ <b>${esc(taskLabel)}</b> failed\n` +
+      `<code>${esc(reason).slice(0, 300)}</code>\n` +
+      `<code>/status ${taskId}</code>`;
+
+    if (task.telegram_message_id) {
+      await this.tgEdit(task.telegram_chat_id, task.telegram_message_id, text);
+    } else {
+      await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: task.telegram_chat_id, text, parse_mode: "HTML" }),
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => { /* best-effort */ });
+    }
+  }
+
   private async editTelegramProgress(
     task: TaskRow,
     nodesCompleted: number,
@@ -1662,8 +1700,8 @@ export class AgentActor implements DurableObject {
 
       // Build keyboard — add "Approve to execute" row if we staged an order
       const baseButtons = [[
-        { text: "📋 View breakdown",  callback_data: `followup:${agentId}:view_breakdown:${task.id}` },
-        { text: "↩ Ask a follow-up", callback_data: `followup:${agentId}:ask_followup:${task.id}` },
+        { text: "📋 View breakdown",  callback_data: `followup:view_breakdown:${task.id}` },
+        { text: "↩ Ask a follow-up", callback_data: `followup:ask_followup:${task.id}` },
       ]];
 
       if (pendingOrderId) {
@@ -1739,12 +1777,16 @@ export class AgentActor implements DurableObject {
       if (chunk.parseMode !== "HTML") continue;
 
       // Plain-text retry — strip tags and try again with no parse_mode.
+      // Deliberately omits reply_markup: a prior BUTTON_DATA_INVALID (or any
+      // other) failure on the first attempt would just repeat identically if
+      // we reattached the same markup, silently dropping the message a
+      // second time. This retry exists to guarantee content delivery; the
+      // buttons are a nice-to-have that isn't worth risking that on.
       const plain = stripHtmlToPlain(chunk.text);
       const retryPayload: Record<string, unknown> = {
         chat_id: task.telegram_chat_id,
         text: plain,
       };
-      if (isFirst && replyMarkup) retryPayload.reply_markup = replyMarkup;
 
       const retry = await fetch(`https://api.telegram.org/bot${this.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: "POST",

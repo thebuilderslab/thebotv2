@@ -25,6 +25,7 @@ import { handleMessage, formatTelegramResponse, logIncomingMessage, logOutgoingR
 import { generatePriceTargets, getStoredTargets, formatTargetsForTelegram } from "../services/price-target-service";
 import { executeOrder, loadPendingOrder, formatOrderForTelegram } from "../services/schwab-orders";
 import { updateStoredThresholds, type PolicyThresholds } from "../services/policy-impact-model";
+import { formatMarkdownForTelegram } from "../utils/telegram-format";
 import { dispatchChangeToGitHub } from "./build";
 
 // ── ETA estimates by task kind (seconds) ─────────────────────────────────────
@@ -64,7 +65,7 @@ telegramRouter.get("/telegram/debug/webhook-info", async (c) => {
 telegramRouter.get("/telegram/debug/fix-webhook", async (c) => {
   const env = c.env as Env;
   const url = "https://bot-nation-api.thejamalshackleford.workers.dev/api/telegram/webhook";
-  const allowed = ["message", "callback_query", "edited_message"];
+  const allowed = ["message", "callback_query", "edited_message", "poll_answer"];
   const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/setWebhook`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -399,7 +400,11 @@ YOU MUST REACH STEP 4. The submit_code_change call is what sends the preview to 
     } catch (err) {
       console.error(`[Webhook] handleCallbackQuery threw:`, err);
     }
-  } else if (!update.message) {
+    return;
+  }
+
+
+  if (!update.message) {
     console.log(`[Webhook] unhandled update type, keys=${Object.keys(update).join(",")}`);
   }
 }
@@ -993,15 +998,17 @@ async function handleCallbackQuery(
     return;
   }
 
-  // ── Follow-up: followup:AGENT_ID:ACTION:TASK_ID ───────────────────────────
+  // ── Follow-up: followup:ACTION:TASK_ID ─────────────────────────────────────
   // User taps "📋 View breakdown" or "↩ Ask a follow-up" on a finance result.
+  // agentId is intentionally not embedded here — it pushed callback_data past
+  // Telegram's 64-byte limit (BUTTON_DATA_INVALID), silently dropping every
+  // finance-lead result message. Looked up from the task row instead.
   if (prefix === "followup") {
-    const agentId = parts[1];
-    const action  = parts[2];
-    const taskId  = parts[3];
+    const action  = parts[1];
+    const taskId  = parts[2];
     const chatId  = cbq.message?.chat.id;
 
-    if (!agentId || !action || !taskId || !chatId) {
+    if (!action || !taskId || !chatId) {
       await answerCallback(env, cbq.id, "❌ Invalid follow-up payload");
       return;
     }
@@ -1009,26 +1016,62 @@ async function handleCallbackQuery(
     await answerCallback(env, cbq.id, "⏳ Loading...");
 
     if (action === "view_breakdown") {
-      // Fetch the full task output from D1
       const taskRow = await queryOne<{ output: string | null; kind: string }>(
         env.DB,
         `SELECT output, kind FROM tasks WHERE id = ? LIMIT 1`,
         [taskId],
       );
-
       if (!taskRow || !taskRow.output) {
         await sendMessage(env, chatId, `ℹ️ No breakdown available for task <code>${taskId}</code>`);
         return;
       }
 
-      // Trim to fit Telegram's 4096 char limit
-      const output = taskRow.output.trim().slice(0, 3800);
-      await sendMessage(env, chatId,
-        `📋 <b>Full breakdown</b> (<code>${taskRow.kind}</code>)\n` +
-        `──────────────────────\n` +
-        output
+      // task.output is JSON: { summary, artifactIds }. The *full* report lives
+      // in the linked artifact's content; summary is only a ~200-char preview.
+      let fullText = "";
+      try {
+        const out = JSON.parse(taskRow.output) as { summary?: string; artifactIds?: string[] };
+        const artifactId = out.artifactIds?.[0];
+        if (artifactId) {
+          const art = await queryOne<{ content: string | null }>(
+            env.DB,
+            `SELECT content FROM artifacts WHERE id = ? LIMIT 1`,
+            [artifactId],
+          );
+          if (art?.content) {
+            try {
+              const parsed = JSON.parse(art.content) as { response?: string; fullReport?: string };
+              fullText = parsed.response ?? parsed.fullReport ?? art.content;
+            } catch { fullText = art.content; }
+          }
+        }
+        if (!fullText) fullText = out.summary ?? taskRow.output;
+      } catch {
+        fullText = taskRow.output; // not JSON — show as-is
+      }
+
+      const chunks = formatMarkdownForTelegram(
+        fullText.trim(),
+        `📋 <b>Full breakdown</b> (<code>${taskRow.kind}</code>)\n──────────────────────`,
       );
+      for (const chunk of chunks) {
+        const payload: Record<string, unknown> = { chat_id: chatId, text: chunk.text };
+        if (chunk.parseMode) payload.parse_mode = chunk.parseMode;
+        await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(8_000),
+        }).catch((e) => console.error("[view_breakdown] send failed:", e));
+      }
     } else if (action === "ask_followup") {
+      const taskRow = await queryOne<{ assigned_agent_id: string | null }>(
+        env.DB,
+        `SELECT assigned_agent_id FROM tasks WHERE id = ? LIMIT 1`,
+        [taskId],
+      );
+      const agentId = taskRow?.assigned_agent_id ?? "agent-finance-lead";
+
       // Prompt the user to type their follow-up question
       await sendMessage(env, chatId,
         `↩ <b>Ask a follow-up</b>\n` +
@@ -1977,6 +2020,11 @@ interface TelegramUpdate {
     from: { id: number };
     message?: { message_id: number; chat: { id: number } };
     data?: string;
+  };
+  poll_answer?: {
+    poll_id: string;
+    user: { id: number; username?: string; first_name?: string };
+    option_ids: number[];
   };
 }
 

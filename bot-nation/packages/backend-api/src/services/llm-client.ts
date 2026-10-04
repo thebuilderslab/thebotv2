@@ -39,6 +39,7 @@ export interface LLMResponse {
   toolCalls: LLMToolCall[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop";
   model: string;
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface StreamChunk {
@@ -142,7 +143,11 @@ async function openrouterComplete(
       input: JSON.parse(tc.function.arguments) as Record<string, unknown>,
     }));
 
-  return { text, toolCalls, stopReason, model: usedModel };
+  const usage = response.usage
+    ? { inputTokens: response.usage.prompt_tokens, outputTokens: response.usage.completion_tokens }
+    : undefined;
+
+  return { text, toolCalls, stopReason, model: usedModel, usage };
 }
 
 // ── Anthropic fallback completion ─────────────────────────────────────────────
@@ -194,7 +199,13 @@ async function anthropicComplete(
     })
     .filter(Boolean) as LLMToolCall[];
 
-  return { text, toolCalls, stopReason, model: "claude-haiku-4-5" };
+  return {
+    text,
+    toolCalls,
+    stopReason,
+    model: "claude-haiku-4-5",
+    usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+  };
 }
 
 // ── Streaming (OpenRouter only) ───────────────────────────────────────────────

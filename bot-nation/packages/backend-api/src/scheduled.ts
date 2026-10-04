@@ -711,6 +711,22 @@ async function runScheduledTick(
     return;
   }
 
+  // NOTE: the quiz bot was retired 2026-07-29 (archived to _archived/quiz-bot/).
+  // Its cron handlers (session1/session2/health) were removed from here.
+
+  // ── OpenRouter weekly balance report (0 13 * * 1 — Monday 9am ET) ─────────────
+  // Fetches the OpenRouter account balance and Telegrams it (always states the
+  // balance; flags < $1; reports the raw error on failure). Report-only.
+  if (controller.cron === "0 13 * * 1") {
+    const { checkOpenRouterBalance } = await import("./services/openrouter-balance");
+    ctx.waitUntil(
+      checkOpenRouterBalance(env).catch((err) =>
+        console.error("[scheduler/openrouter-balance]", err),
+      ),
+    );
+    return;
+  }
+
   // ── Mission cron: insert a scheduled task, let the */5 dispatcher execute it ─
   const mission = MISSION_CRONS[controller.cron];
   if (mission) {

@@ -134,6 +134,43 @@ export function formatForTelegram(
 }
 
 /**
+ * Convert an agent's markdown output into Telegram-safe HTML.
+ * Escapes `<`/`>`/`&` first (so raw glyphs don't break the parser), then maps
+ * the small markdown subset agents actually emit: **bold**, ## headers,
+ * - / * bullets, and `inline code`. Mirrors AgentActor.editTelegramCompletion
+ * so the "View breakdown" button renders identically to the live notification.
+ */
+export function markdownToTelegramHtml(raw: string): string {
+  return escapeAgentHtml(raw)
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    .replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+
+/**
+ * Like formatForTelegram, but converts markdown → HTML instead of only escaping.
+ * For rendering full agent reports (e.g. the "View breakdown" button) with bold,
+ * headers, and bullets intact. Chunks ≤4000 UTF-16 units; falls back to plain
+ * text if any chunk's tags don't balance.
+ */
+export function formatMarkdownForTelegram(
+  rawMarkdown: string,
+  header?: string,
+  footer?: string,
+): TelegramChunk[] {
+  const html = markdownToTelegramHtml(stripActionBlocks(rawMarkdown));
+  const combined = [header, html, footer].filter((s): s is string => Boolean(s)).join("\n");
+
+  const chunks = chunkByUtf16Length(combined, MAX_CHUNK_LENGTH);
+  if (chunks.every((c) => validateTelegramHtml(c))) {
+    return chunks.map((text) => ({ text, parseMode: "HTML" as const }));
+  }
+  const plain = stripHtmlToPlain(combined);
+  return chunkByUtf16Length(plain, MAX_CHUNK_LENGTH).map((text) => ({ text, parseMode: null }));
+}
+
+/**
  * Format policy threshold preview for Telegram handoff.
  * Shows current vs. proposed with impact summary.
  */
