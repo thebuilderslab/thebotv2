@@ -1,5 +1,9 @@
 # projecT87 Integration (Phase 2)
 
+> Migration renamed: 0045_projecT87_tools.sql →
+> 0049_projecT87_tools.sql (2026-10-06, resolved
+> slot conflict with quiz branch migrations)
+
 How the vendored native DeFi service `bot-nation/projecT87/` connects to `bot-nation-api`
 and the console. Grounded in the actual wiring committed in Phase 2.
 
@@ -37,7 +41,7 @@ explicitly-approved, attended flow. It is **never** wired to a cron, task-kind, 
 
 ## Tool registry
 
-Migration `migrations/0045_projecT87_tools.sql` registers:
+Migration `migrations/0049_projecT87_tools.sql` registers:
 - `p87_vault_health`, `p87_notifications`, `p87_health` → `status = active`
 - `p87_credit_borrow` → `status = pending_review` (EXPERIMENTAL; approval-gated)
 
