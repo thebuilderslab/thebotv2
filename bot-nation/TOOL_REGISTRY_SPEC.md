@@ -1,8 +1,15 @@
 # Tool Registry Spec (current state)
 
-The `tools` D1 table as it exists after migrations 0001–0046. **14 rows** — this is the
-complete, verified registry (derived by applying all migrations and reading the table).
-Registration lives in `migrations/{0006,0033,0035,0041,0045,0046}_*.sql`.
+> Updated 2026-10-06: Live tool count is 10 rows
+> (not 14). Migration 0045 renamed to 0049.
+> 4 projecT87 tools (tool-p87-credit-borrow,
+> tool-p87-health, tool-p87-notifications,
+> tool-p87-vault-health) pending via migration
+> 0049 — not yet in D1.
+
+The `tools` D1 table: **10 live rows** in remote D1 (verified 2026-10-06) plus **4 projecT87 tools
+pending via migration 0049** (14 once 0049 is applied). Registration lives in
+`migrations/{0006,0033,0035,0041,0049,0050}_*.sql`.
 
 **Status semantics** (the `status` column): `active` = callable / **LIVE**; `pending_review`
 = registered but **EXPERIMENTAL / approval-gated**, not for autonomous use.
@@ -58,12 +65,12 @@ Registration lives in `migrations/{0006,0033,0035,0041,0045,0046}_*.sql`.
 - Endpoint: `…workers.dev/api/finance/positions`
 - Input: `{}` (none). Returns current D1-stored Schwab positions.
 
-### `schwab_options_chain` — LIVE (`http_api`, registered by 0046)
+### `schwab_options_chain` — LIVE (`http_api`, registered by 0050)
 - Endpoint: `…workers.dev/api/finance/options`
 - Input: `{ "symbol": string (required), "contract_type"?: "CALL"|"PUT"|"ALL", "strike_count"?: integer, "from_date"?: "YYYY-MM-DD", "to_date"?: "YYYY-MM-DD" }`
 - Live options chain from Schwab Market Data (`…/marketdata/v1/chains`). Finance SOP prompts reference it.
 
-## projecT87 (DeFi / Arbitrum) — registered in 0045
+## projecT87 (DeFi / Arbitrum) — PENDING via migration 0049 (not yet in D1)
 
 ### `p87_vault_health` — LIVE (`http_api`)
 - Endpoint: `…workers.dev/api/p87/vault/health`
@@ -88,10 +95,12 @@ Registration lives in `migrations/{0006,0033,0035,0041,0045,0046}_*.sql`.
 
 ## Notes / intentionally omitted
 
-- **`schwab_options_chain` registration gap — RESOLVED by `migrations/0046`.** The capability was always
+- **`schwab_options_chain` registration gap — handled by `migrations/0050` (not yet applied; see note below).** The capability was always
   LIVE (`POST /api/finance/options` → Schwab `…/marketdata/v1/chains`) and finance SOP prompts reference it,
   but `migrations/0033` only ran an `UPDATE ... WHERE name='schwab_options_chain'` that matched 0 rows — the
-  row was never `INSERT`ed. Migration 0046 now inserts it (status `active`, same schema 0033 intended),
-  bringing the registry to 14 tools.
+  row was never `INSERT`ed. Migration 0050 (renamed from 0046) inserts it (status `active`, same schema 0033 intended),
+  bringing the registry to 14 tools once 0049 and 0050 are applied. **Caution:** remote D1 already has a
+  `schwab_options_chain` row (`tool-schwab-options`) and `tools.name` has no unique constraint, so applying 0050 as-is
+  would create a duplicate; add a unique constraint or guard first.
 - Endpoints shown as `…workers.dev` are `https://bot-nation-api.thejamalshackleford.workers.dev`.
 - All read-only projecT87 tools return `503 NOT WIRED` until `PROJECT87_API_URL` + `PROJECT87_API_KEY` are set.
