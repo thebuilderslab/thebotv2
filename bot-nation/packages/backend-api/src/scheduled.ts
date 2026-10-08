@@ -7,7 +7,7 @@
  *   30 12 * * *        — Morning trading analysis 8:30am EDT (agent-finance-lead)
  *   0 15 * * *         — Daily research digest 11:00am EDT (agent-research-lead)
  *   30 18 * * *        — Midday trading analysis 2:30pm EDT (agent-finance-lead)
- *   30 20 * * 1-5      — EOD trading wrap-up 4:30pm EDT weekdays (agent-finance-lead)
+ *   30 20 * * MON-FRI      — EOD trading wrap-up 4:30pm EDT weekdays (agent-finance-lead)
  *   0 12 * * 1         — Weekly intel brief 8:00am EDT Monday (agent-intel-lead)
  *   0 12 * * 3         — Weekly skill refinement 8:00am EDT Wednesday (agent-researcher-2)
  *   every-5-min 13-20 UTC weekdays — Market hours streaming data check
@@ -77,7 +77,7 @@ Output format: structured markdown with sections for Trending Repos, Competitive
     teamId: "team-intel",
   },
   // 8:30am EDT (12:30 UTC) weekdays — Morning Trading Brief
-  "30 12 * * 1-5": {
+  "30 12 * * MON-FRI": {
     kind: "research",
     summary: "Morning trading analysis",
     details: `You are agent-finance-lead. Produce the 8:30 AM pre-market brief. Execute ALL steps in order.
@@ -158,7 +158,7 @@ Weekly credit: [setup on held symbol only]
     teamId: "team-research",
   },
   // 2:30pm EDT (18:30 UTC) weekdays — Midday Trading Analysis
-  "30 18 * * 1-5": {
+  "30 18 * * MON-FRI": {
     kind: "research",
     summary: "Midday trading analysis",
     details: `You are agent-finance-lead. Midday market update — scoped to your actual positions only.
@@ -174,7 +174,7 @@ Format: one paragraph per held symbol. Lead with a one-line session summary (SPY
     teamId: "team-finance",
   },
   // 4:30pm EDT (20:30 UTC) weekdays — EOD Wrap
-  "30 20 * * 1-5": {
+  "30 20 * * MON-FRI": {
     kind: "content_generation",
     summary: "EOD trading wrap-up",
     details: `You are agent-finance-lead. End-of-day wrap — scoped to your actual Schwab positions only.
@@ -191,7 +191,7 @@ Format: one block per held position. Close with a single ACTION ITEM for the mos
     teamId: "team-finance",
   },
   // 4:35pm EDT (20:35 UTC) weekdays — Trade Decision Quality Metrics
-  "35 20 * * 1-5": {
+  "35 20 * * MON-FRI": {
     kind: "content_generation",
     summary: "Trade decision quality metrics calculation",
     details: `Calculate daily trade decision quality metrics (automated — no manual input needed).
@@ -313,7 +313,7 @@ Also send the full formatted report to Telegram.`,
   },
 
   // 8:00pm ET Sunday (00:00 UTC Monday) — Weekly Trade Planning Session
-  "0 0 * * 1": {
+  "0 0 * * MON": {
     kind: "research",
     summary: "Weekly trade plan — entry + exit setup",
     details: `You are agent-finance-lead. It is Sunday evening. Plan the coming week's options trades.
@@ -447,7 +447,7 @@ Output your analysis in 5 bullet points max. No markdown tables.`,
   // 3:00pm ET weekdays (19:00 UTC) — Position Exit Monitor (pre-close check)
   // Fires at 3 PM so the user has 60 min to review + approve/reject before market close.
   // Pending orders expire in 90 min — giving until ~4:30 PM before they go stale.
-  "0 19 * * 1-5": {
+  "0 19 * * MON-FRI": {
     kind: "research",
     summary: "Position exit monitor — pre-close check",
     details: `You are agent-finance-lead. It is 3:00 PM ET — 60 minutes before market close. Run the exit check.
@@ -506,7 +506,7 @@ export async function scheduledHandler(
   // expires_at) are auto-reclaimed so a crashed Worker doesn't lock us out.
   // Skip the lock for the */5 streaming-data check — it's intentionally
   // re-entrant for tick freshness, and the body is idempotent.
-  const isStreamCron = controller.cron === "*/5 13-20 * * 1-5";
+  const isStreamCron = controller.cron === "*/5 13-20 * * MON-FRI";
   if (isStreamCron) {
     return runScheduledTick(controller, env, ctx);
   }
@@ -530,11 +530,11 @@ async function runScheduledTick(
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  // ── Streaming data feed — market hours (*/5 13-20 * * 1-5) ──────────────────
+  // ── Streaming data feed — market hours (*/5 13-20 * * MON-FRI) ──────────────────
   // This cron fires every 5 min Mon-Fri 13:00-20:00 UTC (9:30am-4pm ET).
   // It checks for open positions with no recent tick and flags staleness.
   // Real tick data comes from TOS pushing to POST /api/tws/ws/tick or /api/tws/stream.
-  if (controller.cron === "*/5 13-20 * * 1-5") {
+  if (controller.cron === "*/5 13-20 * * MON-FRI") {
     const watchlist = await getActiveWatchlist(env.DB);
     if (watchlist.length > 0) {
       // Check for positions that haven't had a mark update in >10 minutes
@@ -562,7 +562,7 @@ async function runScheduledTick(
   }
 
   // ── Daily price targets (9:30am ET weekdays = 13:30 UTC) ─────────────────────
-  if (controller.cron === "30 13 * * 1-5") {
+  if (controller.cron === "30 13 * * MON-FRI") {
     ctx.waitUntil((async () => {
       try {
         const targets = await generatePriceTargets(env.DB, {
@@ -595,7 +595,7 @@ async function runScheduledTick(
   // ── A.12 Daily Finance-Intel Progress Report (8:00 AM ET weekdays = 12:00 UTC) ─
   // Read-only D1 probes + one Telegram send + one events.kind='progress.report_sent'.
   // Gated on agent_notes.feature_flags_json.enable_progress_report; if absent, no-op.
-  if (controller.cron === "0 12 * * 1-5") {
+  if (controller.cron === "0 12 * * MON-FRI") {
     ctx.waitUntil((async () => {
       try {
         const flagRow = await queryOne<{ value: string }>(
@@ -694,7 +694,7 @@ async function runScheduledTick(
 
   // ── Trade decision quality metrics calculation (4:35pm EDT weekdays) ──────────
   // Runs automatically 2 min after EOD wrap-up. No agent needed — purely programmatic.
-  if (controller.cron === "35 20 * * 1-5") {
+  if (controller.cron === "35 20 * * MON-FRI") {
     ctx.waitUntil((async () => {
       try {
         await calculateMetrics(env.DB, "agent-finance-lead", 30);
@@ -714,10 +714,10 @@ async function runScheduledTick(
   // NOTE: the quiz bot was retired 2026-07-29 (archived to _archived/quiz-bot/).
   // Its cron handlers (session1/session2/health) were removed from here.
 
-  // ── OpenRouter weekly balance report (0 13 * * 1 — Monday 9am ET) ─────────────
+  // ── OpenRouter weekly balance report (0 13 * * MON — Monday 9am ET) ─────────────
   // Fetches the OpenRouter account balance and Telegrams it (always states the
   // balance; flags < $1; reports the raw error on failure). Report-only.
-  if (controller.cron === "0 13 * * 1") {
+  if (controller.cron === "0 13 * * MON") {
     const { checkOpenRouterBalance } = await import("./services/openrouter-balance");
     ctx.waitUntil(
       checkOpenRouterBalance(env).catch((err) =>

@@ -1,6 +1,6 @@
 // OpenRouter Balance Report — weekly
 //
-// Called by the "0 13 * * 1" cron (Monday 9am ET). Fetches the OpenRouter
+// Called by the "0 13 * * MON" cron (Monday 9am ET). Fetches the OpenRouter
 // account balance and Telegrams it to the operator — always stating the
 // current balance, flagging when it's below $1, and reporting the raw error
 // text if the fetch fails. Report-only: no circuit-breaker, never blocks tasks.

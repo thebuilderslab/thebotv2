@@ -36,16 +36,16 @@
       // ── ACTIVE: Schwab + finance ──────────────────────────────────────────
       "*/5 * * * *",          // task dispatcher — REQUIRED engine for finance tasks to execute
       "0 */6 * * *",          // Schwab token heartbeat (no LLM — works regardless of OpenRouter)
-      "*/5 13-20 * * 2-6",    // market-hours position stream (TWS position ticks)
-      "30 12 * * 2-6",        // morning trading brief (agent-finance-lead)
-      "30 13 * * 2-6",        // daily price targets
-      "30 18 * * 2-6",        // midday trading analysis
-      "0 19 * * 2-6",         // position exit monitor — 3pm ET pre-close
-      "30 20 * * 2-6",        // EOD trading wrap-up
-      "35 20 * * 2-6",        // trade decision quality metrics (programmatic)
-      "0 12 * * 2-6",         // A.12 daily finance-intel progress report
-      "0 0 * * 2",            // weekly trade planning session (Sun 8pm ET)
-      "0 13 * * 2"           // OpenRouter weekly balance report (Mon 9am ET)
+      "*/5 13-20 * * MON-FRI",    // market-hours position stream (TWS position ticks)
+      "30 12 * * MON-FRI",        // morning trading brief (agent-finance-lead)
+      "30 13 * * MON-FRI",        // daily price targets
+      "30 18 * * MON-FRI",        // midday trading analysis
+      "0 19 * * MON-FRI",         // position exit monitor — 3pm ET pre-close
+      "30 20 * * MON-FRI",        // EOD trading wrap-up
+      "35 20 * * MON-FRI",        // trade decision quality metrics (programmatic)
+      "0 12 * * MON-FRI",         // A.12 daily finance-intel progress report
+      "0 0 * * MON",            // weekly trade planning session (Sun 8pm ET)
+      "0 13 * * MON"           // OpenRouter weekly balance report (Mon 9am ET)
       // ── PAUSED (non-finance) — uncomment to restore ───────────────────────
       // "15 12 * * *",            // daily intel check
       // "0 15 * * *",             // daily research digest
